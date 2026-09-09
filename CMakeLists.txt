@@ -1,0 +1,173 @@
+cmake_minimum_required(VERSION 3.13)
+
+project(slop LANGUAGES C CXX)
+
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Generate compile_commands.json for LSP" FORCE)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Debug or Release (Make BUILD=)" FORCE)
+endif()
+
+set(CMAKE_C_FLAGS_DEBUG "-O0 -g" CACHE STRING "Debug C flags" FORCE)
+set(CMAKE_C_FLAGS_RELEASE "-Os -g0" CACHE STRING "Release C flags" FORCE)
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "-Os -g" CACHE STRING "RelWithDebInfo C flags" FORCE)
+set(CMAKE_C_FLAGS_MINSIZEREL "-Os -g0" CACHE STRING "MinSizeRel C flags" FORCE)
+
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g" CACHE STRING "Debug CXX flags" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE "-Os -g0" CACHE STRING "Release CXX flags" FORCE)
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Os -g" CACHE STRING "RelWithDebInfo CXX flags" FORCE)
+set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -g0" CACHE STRING "MinSizeRel CXX flags" FORCE)
+
+option(SLOP_ENABLE_IPO "Enable LTO/IPO" OFF)
+
+set(SLOP_WARNINGS -Wall -Wextra)
+
+macro(add_interface_lib name path)
+    add_library(${name} INTERFACE)
+    target_include_directories(${name} INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/${path}")
+endmacro()
+
+add_interface_lib(libs vendors/libs)
+
+find_package(ZLIB REQUIRED)
+
+file(GLOB_RECURSE SLOP_CXX_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
+file(GLOB_RECURSE SLOP_C_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
+)
+set(SLOP_VENDOR_C_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/vendors/cjson/cJSON.c"
+)
+if(SLOP_CXX_SOURCES STREQUAL "")
+    message(FATAL_ERROR "No C++ sources found in src/")
+endif()
+
+add_executable(slop ${SLOP_CXX_SOURCES} ${SLOP_C_SOURCES} ${SLOP_VENDOR_C_SOURCES})
+target_compile_options(slop PRIVATE ${SLOP_WARNINGS})
+target_include_directories(slop PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vendors"
+)
+if(UNIX)
+    target_compile_definitions(slop PRIVATE _DEFAULT_SOURCE)
+endif()
+target_compile_definitions(slop PRIVATE "APP_NAME=\"slop\"")
+target_compile_definitions(slop PRIVATE $<$<CONFIG:Release>:NDEBUG> $<$<CONFIG:MinSizeRel>:NDEBUG>)
+
+target_link_libraries(slop PRIVATE
+    libs
+    ZLIB::ZLIB
+    m
+)
+
+if(SLOP_ENABLE_IPO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT slop_ipo_ok OUTPUT slop_ipo_msg)
+    if(slop_ipo_ok)
+        set_property(TARGET slop PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    else()
+        message(STATUS "IPO requested but not supported: ${slop_ipo_msg}")
+    endif()
+endif()
+
+enable_testing()
+
+set(TEST_BIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/bin")
+file(MAKE_DIRECTORY "${TEST_BIN_DIR}")
+
+set(TEST_N "" CACHE STRING "If set, run only matching NNN tests (comma-separated ok)")
+set(TEST_S "" CACHE STRING "If set, run tests/NNN from NNN onward")
+
+function(_pad_test_num raw out_var)
+    string(LENGTH "${raw}" _len)
+    if(_len EQUAL 1)
+        set(${out_var} "00${raw}" PARENT_SCOPE)
+    elseif(_len EQUAL 2)
+        set(${out_var} "0${raw}" PARENT_SCOPE)
+    else()
+        set(${out_var} "${raw}" PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(_test_num_to_int num out_var)
+    string(REGEX REPLACE "^0+" "" _unpadded "${num}")
+    if(_unpadded STREQUAL "")
+        set(_unpadded "0")
+    endif()
+    math(EXPR ${out_var} "${_unpadded}")
+    set(${out_var} ${${out_var}} PARENT_SCOPE)
+endfunction()
+
+set(TEST_FILTER_LIST "")
+if(NOT TEST_N STREQUAL "")
+    string(REPLACE " " "" _test_n_compact "${TEST_N}")
+    string(REPLACE "," ";" _test_n_parts "${_test_n_compact}")
+    foreach(_part IN LISTS _test_n_parts)
+        if(_part STREQUAL "")
+            continue()
+        endif()
+        _pad_test_num("${_part}" _padded)
+        list(APPEND TEST_FILTER_LIST "${_padded}")
+    endforeach()
+endif()
+
+set(TEST_START_INT -1)
+if(TEST_FILTER_LIST STREQUAL "" AND NOT TEST_S STREQUAL "")
+    _pad_test_num("${TEST_S}" _test_start_padded)
+    _test_num_to_int("${_test_start_padded}" TEST_START_INT)
+endif()
+
+set(TEST_IMPL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/impl.c")
+
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.c")
+foreach(TEST_SOURCE ${TEST_SOURCES})
+    get_filename_component(TEST_BASENAME ${TEST_SOURCE} NAME)
+    if(TEST_BASENAME MATCHES "^([0-9][0-9][0-9])[-_].*\\.c$")
+        set(TEST_NUM ${CMAKE_MATCH_1})
+        if(NOT TEST_FILTER_LIST STREQUAL "")
+            list(FIND TEST_FILTER_LIST "${TEST_NUM}" _filter_idx)
+            if(_filter_idx LESS 0)
+                continue()
+            endif()
+        endif()
+        if(TEST_START_INT GREATER_EQUAL 0)
+            _test_num_to_int("${TEST_NUM}" _test_num_int)
+            if(_test_num_int LESS TEST_START_INT)
+                continue()
+            endif()
+        endif()
+        get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
+        add_executable(${TEST_NAME}
+            ${TEST_SOURCE}
+            ${TEST_IMPL_SOURCES}
+        )
+        target_compile_options(${TEST_NAME} PRIVATE ${SLOP_WARNINGS})
+        target_include_directories(${TEST_NAME} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/vendors/libs"
+        )
+        target_link_libraries(${TEST_NAME} PRIVATE libs)
+        if(UNIX)
+            target_compile_definitions(${TEST_NAME} PRIVATE _DEFAULT_SOURCE)
+        endif()
+        set_target_properties(${TEST_NAME} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${TEST_BIN_DIR}"
+            RUNTIME_OUTPUT_DIRECTORY_DEBUG "${TEST_BIN_DIR}"
+            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${TEST_BIN_DIR}"
+        )
+        add_test(NAME ${TEST_NAME} COMMAND "${TEST_BIN_DIR}/${TEST_NAME}")
+    endif()
+endforeach()

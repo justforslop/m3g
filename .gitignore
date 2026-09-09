@@ -1,0 +1,17 @@
+build/
+out/
+tests/bin/
+compile_commands.json
+*.o
+*.a
+.cache/
+cmake-build-*/
+
+# vendors/
+vendors/
+
+# references
+references/
+
+# auto generated
+.ccls-cache
