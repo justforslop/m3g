@@ -220,17 +220,35 @@ $(IMGUI_STAMP): $(IMGUI_ARCHIVE)
 	@rm -f $(IMGUI_DIR)/imgui_demo.cpp
 	@touch $@
 
-# Run tests under tests/NNN-*.c or tests/NNN_*.c (gcc + Make; no CMake)
+# Run tests under tests/NNN_*.{c,cpp} or tests/NNN-*.{c,cpp}
 n ?=
 s ?=
 TEST_CFLAGS := -std=c99 -Wall -Wextra -g -D_DEFAULT_SOURCE
+TEST_CXXFLAGS := -std=c++17 -Wall -Wextra -g -D_DEFAULT_SOURCE
 TEST_INCLUDES := -I. -Iinclude -Ivendors/libs
+TEST_M3G_INCLUDES := -I. -Iinclude -Isrc -Ivendors -Ivendors/libs -Ivendors/cgltf -Ivendors/miniz
 TEST_IMPL := tests/impl.c
+# Library sources for C++ tests that need m3g (adapters auto-install backends).
+TEST_M3G_SRCS := \
+	src/converter.cpp \
+	src/decode/decoder.cpp \
+	src/deflate_io_miniz.cpp \
+	src/export/gltf_exporter.cpp \
+	src/gltf/gltf_writer.cpp \
+	src/gltf_io_cgltf.cpp \
+	src/image_io_stb.cpp \
+	src/json_io_cjson.cpp \
+	src/util/png_writer.cpp \
+	src/impl.c \
+	vendors/cjson/cJSON.c \
+	vendors/miniz/miniz.c
+TEST_M3G_LIBS := -lm
 ifeq ($(CROSS_COMPILE),)
 TEST_CC ?= $(shell command -v musl-gcc 2>/dev/null || command -v x86_64-linux-musl-gcc 2>/dev/null || echo "$(CC)")
 else
 TEST_CC ?= $(CC)
 endif
+TEST_CXX ?= $(CXX)
 
 test:
 	@mkdir -p $(TEST_BINDIR)
@@ -243,9 +261,13 @@ test:
 		start_s=$$(echo "$(s)" | sed 's/^0*//'); \
 		[ -z "$$start_s" ] && start_s=0; \
 	fi; \
-	for src in tests/[0-9][0-9][0-9]_*.c tests/[0-9][0-9][0-9]-*.c; do \
+	for src in tests/[0-9][0-9][0-9]_*.c tests/[0-9][0-9][0-9]-*.c \
+	           tests/[0-9][0-9][0-9]_*.cpp tests/[0-9][0-9][0-9]-*.cpp; do \
 		[ -f "$$src" ] || continue; \
-		base=$$(basename "$$src" .c); \
+		case "$$src" in \
+			*.cpp) base=$$(basename "$$src" .cpp); lang=cpp ;; \
+			*)     base=$$(basename "$$src" .c);   lang=c ;; \
+		esac; \
 		num=$$(echo "$$base" | sed 's/^\([0-9][0-9][0-9]\).*/\1/'); \
 		if [ "$$use_n" -eq 1 ]; then \
 			match=0; \
@@ -264,8 +286,14 @@ test:
 			[ -z "$$num_i" ] && num_i=0; \
 			[ "$$num_i" -ge "$$start_s" ] || continue; \
 		fi; \
-		echo "CC  $(TEST_BINDIR)/$$base  [$(TEST_CC)]"; \
-		$(TEST_CC) $(TEST_CFLAGS) $(TEST_INCLUDES) -o $(TEST_BINDIR)/$$base $$src $(TEST_IMPL) || exit 1; \
+		if [ "$$lang" = cpp ]; then \
+			echo "CXX $(TEST_BINDIR)/$$base  [$(TEST_CXX)]"; \
+			$(TEST_CXX) $(TEST_CXXFLAGS) $(TEST_M3G_INCLUDES) -o $(TEST_BINDIR)/$$base \
+				$$src $(TEST_IMPL) $(TEST_M3G_SRCS) $(TEST_M3G_LIBS) || exit 1; \
+		else \
+			echo "CC  $(TEST_BINDIR)/$$base  [$(TEST_CC)]"; \
+			$(TEST_CC) $(TEST_CFLAGS) $(TEST_INCLUDES) -o $(TEST_BINDIR)/$$base $$src $(TEST_IMPL) || exit 1; \
+		fi; \
 		echo "RUN $(TEST_BINDIR)/$$base"; \
 		$(TEST_BINDIR)/$$base || failed=1; \
 	done; \

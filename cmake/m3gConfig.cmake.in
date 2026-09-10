@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# libm for math used by the library on UNIX.
+if(UNIX)
+  set(THREADS_PREFER_PTHREAD_FLAG ON)
+  # no find_dependency required for libm; imported target carries the link flag
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/m3gTargets.cmake")
+
+check_required_components(m3g)

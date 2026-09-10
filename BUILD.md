@@ -3,7 +3,8 @@
 `m3g` is built with **g++/gcc** for the **viewer** (`debug`) and **CLI**
 (`release`) builds. Use either **Make** (`Makefile`) or **Ninja**
 (`build.ninja`) — same outputs and flags.\
-**No CMake** is required to compile, test, or convert M3G files.\
+**Make or Ninja** is enough to compile, test, or convert M3G files. **CMake** is
+optional for packaging (`find_package`), `ctest`, and LSP `compile_commands`.\
 Most third-party code lives under `vendors/` and is fetched with the `setup`
 targets (Make or Ninja).
 
@@ -41,7 +42,7 @@ are the same either way.
 
 | Tool  | Role if present                                                            |
 | ----- | -------------------------------------------------------------------------- |
-| CMake | Optional only: `compile_commands.json` for clangd / LSP (`CMakeLists.txt`) |
+| CMake | Optional: installable package, `ctest`, `compile_commands.json` |
 
 **System libraries** (headers + link libs):
 
@@ -187,16 +188,45 @@ ninja release cc=aarch64-linux-gnu-gcc cxx=aarch64-linux-gnu-g++
 You need **target** headers and libraries (`libz`, and for the viewer `libGL` /
 X11) for that architecture.
 
-### CMake (optional)
+### CMake (optional package + tools)
 
-`CMakeLists.txt` remains only for optional developer tooling (LSP
-`compile_commands.json`, optional `ctest`):
+CMake builds an installable **library package** `m3g::m3g` (static by default),
+optional CLI, tests, and `compile_commands.json`.
 
 ```bash
-cmake -S . -B build && cmake --build build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build
+cmake --install build
 ```
 
-Do **not** use CMake for the normal viewer/CLI workflow. Do **not** use Zig.
+| Option | Default (top-level) | Meaning |
+| ------ | ------------------- | ------- |
+| `M3G_BUILD_CLI` | ON | `m3g` CLI executable |
+| `M3G_BUILD_VIEWER` | OFF | Sokol viewer (`m3g-view`) |
+| `M3G_BUILD_TESTS` | ON | unit tests + `ctest` |
+| `M3G_INSTALL` | ON | install + Config package |
+| `M3G_ENABLE_IPO` | OFF | LTO |
+| `BUILD_SHARED_LIBS` | OFF | shared vs static `libm3g` |
+
+**Consumer (`find_package`):**
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(app LANGUAGES CXX)
+find_package(m3g 0.1 REQUIRED CONFIG)
+add_executable(app main.cpp)
+target_link_libraries(app PRIVATE m3g::m3g)
+```
+
+```bash
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/usr/local
+```
+
+As a subdirectory: `add_subdirectory(m3g)` then `target_link_libraries(app PRIVATE m3g::m3g)`.
+
+Installed layout: `include/m3g.hpp`, `include/m3g.h`, `lib/libm3g.*`,
+`lib/cmake/m3g/m3gConfig.cmake`. Vendored miniz/cgltf/stb/cJSON are compiled
+into the library (not separate find modules).
 
 ## Run
 
