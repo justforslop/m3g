@@ -1,8 +1,8 @@
-#include "slop/gltf_exporter.hpp"
+#include "m3g.hpp"
 
 #include "gltf/gltf_writer.hpp"
 
-namespace slop {
+namespace m3g {
 namespace exp {
 
 GltfPaths GltfExporter::write(const decode::Decoded &decoded, const std::string &output_path, bool overwrite,
@@ -22,4 +22,4 @@ GltfPaths GltfExporter::write(const scene::SceneIr &scene_ir, const std::string 
 }
 
 } // namespace exp
-} // namespace slop
+} // namespace m3g

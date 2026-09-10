@@ -1,23 +1,20 @@
-#include "slop/converter.hpp"
+#include "m3g.hpp"
 
-#include "slop/decoder.hpp"
-#include "slop/gltf_exporter.hpp"
+namespace m3g {
 
-namespace slop {
-
-decode::Decoded M3gConverter::decode(const std::string &input_path,
+decode::Decoded Converter::decode(const std::string &input_path,
                                      const std::optional<std::string> &pattern_path) const {
     decode::DecodeOptions options;
     options.pattern_path = pattern_path;
     return decode::Decoder{}.decode_file(input_path, options);
 }
 
-exp::GltfPaths M3gConverter::export_gltf(const decode::Decoded &decoded, const std::string &output_path, bool overwrite,
+exp::GltfPaths Converter::export_gltf(const decode::Decoded &decoded, const std::string &output_path, bool overwrite,
                                          int png_compression_level) const {
     return exp::GltfExporter{}.write(decoded, output_path, overwrite, png_compression_level);
 }
 
-exp::ExportReport M3gConverter::convert(const std::string &input_path, const std::string &output_path, bool overwrite,
+exp::ExportReport Converter::convert(const std::string &input_path, const std::string &output_path, bool overwrite,
                                         const std::optional<std::string> &pattern_path,
                                         int png_compression_level) const {
     exp::ExportReport report;
@@ -26,4 +23,4 @@ exp::ExportReport M3gConverter::convert(const std::string &input_path, const std
     return report;
 }
 
-} // namespace slop
+} // namespace m3g

@@ -1,18 +1,18 @@
 /*
- * src/debug.c — simple M3G viewer (sokol_app + sokol_gfx + sokol_gl + slop decode).
+ * src/debug.c — simple M3G viewer (sokol_app + sokol_gfx + sokol_gl + m3g decode).
  *
  * Inspired by sokol-samples cgltf-sapp, but loads M3G via the public decode API
  * and draws with sokol_gl (no basisu / shdc / dbgui).
  *
  * Build:  make view
- * Run:    ./out/slop-view assets/90.m3g
+ * Run:    ./build/debug assets/90.m3g
  *
  * Controls:
  *   LMB drag  — orbit
  *   wheel     — zoom
  *   Esc       — quit
  *
- * Compiled as C++ (g++ -x c++) so we can use <slop/decode.hpp>.
+ * Compiled as C++ (g++ -x c++) so we can use <m3g.hpp>.
  */
 #define SOKOL_IMPL
 #define SOKOL_TIME_IMPL
@@ -33,7 +33,7 @@
 #define SOKOL_APP_IMGUI_IMPL
 #include "sokol/util/sokol_app_imgui.h"
 
-#include <slop/decode.hpp>
+#include <m3g.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -128,7 +128,7 @@ struct App {
     bool failed = false;
     std::string path;
     std::string status;
-    slop::decode::Decoded decoded;
+    m3g::decode::Decoded decoded;
     std::vector<TriVertex> tris; // expanded triangle list (3 verts each)
     std::vector<GpuImage> gpu_images;
     std::vector<char> mesh_visible;
@@ -206,7 +206,7 @@ void compute_bounds(const std::vector<TriVertex> &tris, Vec3 *out_center, float 
     }
 }
 
-int material_image_index(const slop::scene::SceneIr &scene, const slop::scene::ScenePrimitiveIr &prim) {
+int material_image_index(const m3g::scene::SceneIr &scene, const m3g::scene::ScenePrimitiveIr &prim) {
     if (!prim.material_index || *prim.material_index < 0 ||
         *prim.material_index >= static_cast<int>(scene.materials.size())) {
         return -1;
@@ -226,7 +226,7 @@ int material_image_index(const slop::scene::SceneIr &scene, const slop::scene::S
     return img_i;
 }
 
-void append_mesh(const slop::scene::SceneIr &scene, int mesh_index, const Mat4 &world,
+void append_mesh(const m3g::scene::SceneIr &scene, int mesh_index, const Mat4 &world,
                  const float base_color[3], std::vector<TriVertex> *out) {
     if (mesh_index < 0 || mesh_index >= static_cast<int>(scene.meshes.size())) {
         return;
@@ -305,7 +305,7 @@ void append_mesh(const slop::scene::SceneIr &scene, int mesh_index, const Mat4 &
     }
 }
 
-void walk_node(const slop::scene::SceneIr &scene, int node_index, const Mat4 &parent,
+void walk_node(const m3g::scene::SceneIr &scene, int node_index, const Mat4 &parent,
                std::vector<TriVertex> *out) {
     if (node_index < 0 || node_index >= static_cast<int>(scene.nodes.size())) {
         return;
@@ -448,7 +448,7 @@ void create_gpu_images(void) {
 bool load_m3g(const char *path) {
     g.path = path ? path : "";
     try {
-        g.decoded = slop::decode::Decoder{}.decode_file(g.path);
+        g.decoded = m3g::decode::Decoder{}.decode_file(g.path);
         g.orig_dist = 0.f;
         build_draw_list();
         if (sg_isvalid()) {
@@ -478,7 +478,7 @@ void draw_ui(void) {
     ImGui::SetNextWindowPos(ImVec2(20, 28), ImGuiCond_Once);
     ImGui::SetNextWindowSize(ImVec2(320, 420), ImGuiCond_Once);
     ImGui::SetNextWindowBgAlpha(0.4f);
-    if (ImGui::Begin("slop debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::Begin("m3g debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         if (g.failed) {
             ImGui::TextWrapped("%s", g.status.c_str());
         } else {
@@ -612,7 +612,7 @@ void init(void) {
         load_m3g(g.path.c_str());
     } else {
         g.failed = true;
-        g.status = "Usage: slop-view <file.m3g>";
+        g.status = "Usage: m3g-view <file.m3g>";
     }
 }
 
@@ -801,7 +801,7 @@ extern "C" sapp_desc sokol_main(int argc, char *argv[]) {
     desc.width = 1024;
     desc.height = 720;
     desc.sample_count = 4;
-    desc.window_title = "slop M3G viewer";
+    desc.window_title = "m3g M3G viewer";
     desc.icon.sokol_default = true;
     desc.logger.func = slog_func;
     return desc;

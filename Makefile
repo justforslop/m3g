@@ -1,11 +1,14 @@
-# slop — M3G decoder / glTF converter (C++17)
+# m3g — M3G decoder / glTF converter (C++17)
 #
 # Build:
 #   make            # viewer -> build/debug  (sokol)
 #   make debug      # same
 #   make view       # same as make debug
-#   make release    # CLI    -> build/slop
+#   make release    # CLI    -> build/m3g
 #   make clean
+#
+# Ninja (same targets/outputs; see build.ninja and BUILD.md):
+#   ninja / ninja debug / ninja view / ninja release / ninja test / ninja setup
 #
 # Viewer:
 #   ./build/debug assets/90.m3g
@@ -16,7 +19,7 @@
 #   cmake -S . -B build && cmake --build build
 #
 # Vendored headers:
-#   make setup
+#   make setup   # or: ninja setup
 .PHONY: all debug release view clean setup setup-libs setup-cgltf setup-cjson setup-stb setup-sokol setup-miniz setup-imgui test
 
 MINIZ_TAG := 3.1.2
@@ -32,7 +35,7 @@ IMGUI_ARCHIVE := build/imgui-$(IMGUI_TAG).zip
 IMGUI_DIR := vendors/imgui
 IMGUI_STAMP := $(IMGUI_DIR)/.extracted
 
-APP      := slop
+APP      := m3g
 BUILDROOT := build
 SRCDIR   := src
 INCDIR   := include
@@ -87,7 +90,7 @@ $(DEBUG_BIN): $(VIEW_LIB_OBJS) $(VIEW_DEBUG_OBJ) $(IMGUI_OBJS) | $(BUILDROOT)
 	@echo "LD  $@"
 	$(CXX) $(APP_CXXFLAGS) -o $@ $(VIEW_LIB_OBJS) $(VIEW_DEBUG_OBJ) $(IMGUI_OBJS) $(APP_LDFLAGS) $(VIEW_LIBS)
 
-# debug.c is C++ (uses slop decode API + sokol + imgui).
+# debug.c is C++ (uses m3g decode API + sokol + imgui).
 $(VIEW_DEBUG_OBJ): $(SRCDIR)/debug.c
 	@mkdir -p $(dir $@)
 	@echo "CXX $<  (viewer)"
@@ -127,15 +130,11 @@ setup-libs:
 	@mkdir -p vendors/libs
 	$(CURL) vendors/libs/testfw.h \
 		https://raw.githubusercontent.com/mattiasgustavsson/libs/refs/heads/main/testfw.h
-	$(CURL) vendors/libs/vecmath.h \
-		https://raw.githubusercontent.com/mattiasgustavsson/libs/refs/heads/main/vecmath.h
 
 setup-cgltf:
 	@mkdir -p vendors/cgltf
 	$(CURL) vendors/cgltf/cgltf.h \
 		https://raw.githubusercontent.com/jkuhlmann/cgltf/refs/heads/master/cgltf.h
-	$(CURL) vendors/cgltf/cgltf_write.h \
-		https://raw.githubusercontent.com/jkuhlmann/cgltf/refs/heads/master/cgltf_write.h
 
 setup-cjson:
 	@mkdir -p vendors/cjson
@@ -150,19 +149,12 @@ setup-stb:
 		https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image.h
 	$(CURL) vendors/stb/stb_image_write.h \
 		https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image_write.h
-	$(CURL) vendors/stb/stb_image_resize2.h \
-		https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image_resize2.h
 
+# Only headers used by src/debug.c (viewer).
 setup-sokol:
 	@mkdir -p vendors/sokol vendors/sokol/util
 	$(CURL) vendors/sokol/sokol_app.h \
 		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_app.h
-	$(CURL) vendors/sokol/sokol_args.h \
-		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_args.h
-	$(CURL) vendors/sokol/sokol_audio.h \
-		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_audio.h
-	$(CURL) vendors/sokol/sokol_fetch.h \
-		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_fetch.h
 	$(CURL) vendors/sokol/sokol_gfx.h \
 		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_gfx.h
 	$(CURL) vendors/sokol/sokol_glue.h \
@@ -171,18 +163,8 @@ setup-sokol:
 		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_log.h
 	$(CURL) vendors/sokol/sokol_time.h \
 		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_time.h
-	$(CURL) vendors/sokol/util/sokol_color.h \
-		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_color.h
-	$(CURL) vendors/sokol/util/sokol_letterbox.h \
-		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_letterbox.h
-	$(CURL) vendors/sokol/util/sokol_debugtext.h \
-		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_debugtext.h
-	$(CURL) vendors/sokol/util/sokol_framebuffer.h \
-		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_framebuffer.h
 	$(CURL) vendors/sokol/util/sokol_gl.h \
 		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_gl.h
-	$(CURL) vendors/sokol/util/sokol_fontstash.h \
-		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_fontstash.h
 	$(CURL) vendors/sokol/util/sokol_imgui.h \
 		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_imgui.h
 	$(CURL) vendors/sokol/util/sokol_gfx_imgui.h \
@@ -200,6 +182,8 @@ $(MINIZ_STAMP): $(MINIZ_ARCHIVE)
 	@rm -rf $(MINIZ_DIR)
 	@mkdir -p $(MINIZ_DIR)
 	@7z x $< -o$(MINIZ_DIR) -y
+	@rm -rf $(MINIZ_DIR)/examples
+	@rm -f $(MINIZ_DIR)/ChangeLog.md $(MINIZ_DIR)/readme.md
 	@touch $@
 
 setup-imgui: $(IMGUI_STAMP)
@@ -214,6 +198,8 @@ $(IMGUI_STAMP): $(IMGUI_ARCHIVE)
 	@7z x $< -o$(IMGUI_DIR) -y
 	@mv $(IMGUI_DIR)/imgui-$(IMGUI_TAG)/* $(IMGUI_DIR)/
 	@rm -rf $(IMGUI_DIR)/imgui-$(IMGUI_TAG)
+	@rm -rf $(IMGUI_DIR)/backends $(IMGUI_DIR)/docs $(IMGUI_DIR)/examples $(IMGUI_DIR)/misc
+	@rm -f $(IMGUI_DIR)/imgui_demo.cpp
 	@touch $@
 
 # Run tests under tests/NNN-*.c or tests/NNN_*.c (gcc + Make; no CMake)

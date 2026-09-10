@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.13)
 
-project(slop LANGUAGES C CXX)
+project(m3g LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -26,9 +26,9 @@ set(CMAKE_CXX_FLAGS_RELEASE "-Os -g0" CACHE STRING "Release CXX flags" FORCE)
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Os -g" CACHE STRING "RelWithDebInfo CXX flags" FORCE)
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -g0" CACHE STRING "MinSizeRel CXX flags" FORCE)
 
-option(SLOP_ENABLE_IPO "Enable LTO/IPO" OFF)
+option(M3G_ENABLE_IPO "Enable LTO/IPO" OFF)
 
-set(SLOP_WARNINGS -Wall -Wextra)
+set(M3G_WARNINGS -Wall -Wextra)
 
 macro(add_interface_lib name path)
     add_library(${name} INTERFACE)
@@ -37,23 +37,23 @@ endmacro()
 
 add_interface_lib(libs vendors/libs)
 
-file(GLOB_RECURSE SLOP_CXX_SOURCES CONFIGURE_DEPENDS
+file(GLOB_RECURSE M3G_CXX_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
-file(GLOB_RECURSE SLOP_C_SOURCES CONFIGURE_DEPENDS
+file(GLOB_RECURSE M3G_C_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
 )
-set(SLOP_VENDOR_C_SOURCES
+set(M3G_VENDOR_C_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/vendors/cjson/cJSON.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/vendors/miniz/miniz.c"
 )
-if(SLOP_CXX_SOURCES STREQUAL "")
+if(M3G_CXX_SOURCES STREQUAL "")
     message(FATAL_ERROR "No C++ sources found in src/")
 endif()
 
-add_executable(slop ${SLOP_CXX_SOURCES} ${SLOP_C_SOURCES} ${SLOP_VENDOR_C_SOURCES})
-target_compile_options(slop PRIVATE ${SLOP_WARNINGS})
-target_include_directories(slop PRIVATE
+add_executable(m3g ${M3G_CXX_SOURCES} ${M3G_C_SOURCES} ${M3G_VENDOR_C_SOURCES})
+target_compile_options(m3g PRIVATE ${M3G_WARNINGS})
+target_include_directories(m3g PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -61,23 +61,23 @@ target_include_directories(slop PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/vendors/miniz"
 )
 if(UNIX)
-    target_compile_definitions(slop PRIVATE _DEFAULT_SOURCE)
+    target_compile_definitions(m3g PRIVATE _DEFAULT_SOURCE)
 endif()
-target_compile_definitions(slop PRIVATE "APP_NAME=\"slop\"")
-target_compile_definitions(slop PRIVATE $<$<CONFIG:Release>:NDEBUG> $<$<CONFIG:MinSizeRel>:NDEBUG>)
+target_compile_definitions(m3g PRIVATE "APP_NAME=\"m3g\"")
+target_compile_definitions(m3g PRIVATE $<$<CONFIG:Release>:NDEBUG> $<$<CONFIG:MinSizeRel>:NDEBUG>)
 
-target_link_libraries(slop PRIVATE
+target_link_libraries(m3g PRIVATE
     libs
     m
 )
 
-if(SLOP_ENABLE_IPO)
+if(M3G_ENABLE_IPO)
     include(CheckIPOSupported)
-    check_ipo_supported(RESULT slop_ipo_ok OUTPUT slop_ipo_msg)
-    if(slop_ipo_ok)
-        set_property(TARGET slop PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    check_ipo_supported(RESULT m3g_ipo_ok OUTPUT m3g_ipo_msg)
+    if(m3g_ipo_ok)
+        set_property(TARGET m3g PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     else()
-        message(STATUS "IPO requested but not supported: ${slop_ipo_msg}")
+        message(STATUS "IPO requested but not supported: ${m3g_ipo_msg}")
     endif()
 endif()
 
@@ -152,7 +152,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             ${TEST_SOURCE}
             ${TEST_IMPL_SOURCES}
         )
-        target_compile_options(${TEST_NAME} PRIVATE ${SLOP_WARNINGS})
+        target_compile_options(${TEST_NAME} PRIVATE ${M3G_WARNINGS})
         target_include_directories(${TEST_NAME} PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}"
             "${CMAKE_CURRENT_SOURCE_DIR}/include"

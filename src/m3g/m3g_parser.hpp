@@ -1,18 +1,7 @@
-#pragma once
+#ifndef M3G_M3G_PARSER_HPP_INCLUDED
+#define M3G_M3G_PARSER_HPP_INCLUDED
 
-#include "slop/m3g_model.hpp"
+/* M3G parser lives in include/m3g.hpp under #define M3G_DECODE_IMPL. */
+#include "m3g.hpp"
 
-#include <string>
-#include <vector>
-
-namespace slop {
-namespace m3g {
-
-class Parser {
-public:
-    File parse_path(const std::string &path) const;
-    File parse(const std::vector<std::uint8_t> &bytes) const;
-};
-
-} // namespace m3g
-} // namespace slop
+#endif /* M3G_M3G_PARSER_HPP_INCLUDED */

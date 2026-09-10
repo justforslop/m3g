@@ -1,10 +1,11 @@
-#pragma once
+#ifndef M3G_PNG_WRITER_HPP_INCLUDED
+#define M3G_PNG_WRITER_HPP_INCLUDED
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace slop {
+namespace m3g {
 namespace util {
 
 // RGBA8 image writer backed by stb_image_write (stbi_write_png).
@@ -14,4 +15,6 @@ struct PngWriter {
 };
 
 } // namespace util
-} // namespace slop
+} // namespace m3g
+
+#endif /* M3G_PNG_WRITER_HPP_INCLUDED */

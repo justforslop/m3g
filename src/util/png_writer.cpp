@@ -5,7 +5,7 @@
 #include <filesystem>
 #include <stdexcept>
 
-namespace slop {
+namespace m3g {
 namespace util {
 
 void PngWriter::write_rgba(const std::string &path, int width, int height, const std::vector<std::uint8_t> &pixels,
@@ -38,4 +38,4 @@ void PngWriter::write_rgba(const std::string &path, int width, int height, const
 }
 
 } // namespace util
-} // namespace slop
+} // namespace m3g

@@ -1,10 +1,11 @@
-#pragma once
+#ifndef M3G_GLTF_WRITER_HPP_INCLUDED
+#define M3G_GLTF_WRITER_HPP_INCLUDED
 
-#include "slop/scene_model.hpp"
+#include "m3g.hpp"
 
 #include <string>
 
-namespace slop {
+namespace m3g {
 namespace gltf {
 
 class GltfWriter {
@@ -14,4 +15,6 @@ public:
 };
 
 } // namespace gltf
-} // namespace slop
+} // namespace m3g
+
+#endif /* M3G_GLTF_WRITER_HPP_INCLUDED */

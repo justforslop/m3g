@@ -1,11 +1,8 @@
 #include "gltf/gltf_writer.hpp"
 
-#include "scene/matrix_util.hpp"
 #include "util/png_writer.hpp"
 
 #include "cgltf/cgltf.h"
-#include "cjson/cJSON.h"
-#include "stb/stb_image.h"
 #include "stb/stb_image_write.h"
 
 #include <algorithm>
@@ -21,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace slop {
+namespace m3g {
 namespace gltf {
 namespace {
 
@@ -97,57 +94,49 @@ private:
     std::vector<std::uint8_t> out_;
 };
 
-struct CJsonDeleter {
-    void operator()(cJSON *p) const {
-        if (p) {
-            cJSON_Delete(p);
-        }
-    }
+struct JsonNodeDeleter {
+    void operator()(void *p) const { json_delete(p); }
 };
 
-using CJsonPtr = std::unique_ptr<cJSON, CJsonDeleter>;
+using JsonPtr = std::unique_ptr<void, JsonNodeDeleter>;
 
-struct CJsonPrintDeleter {
-    void operator()(char *p) const {
-        if (p) {
-            cJSON_free(p);
-        }
-    }
+struct JsonPrintDeleter {
+    void operator()(char *p) const { json_free_print(p); }
 };
 
-cJSON *require_json(cJSON *item, const char *what) {
+void *require_json(void *item, const char *what) {
     if (!item) {
-        throw std::runtime_error(std::string("cJSON allocation failed: ") + what);
+        throw std::runtime_error(std::string("JSON allocation failed: ") + what);
     }
     return item;
 }
 
-cJSON *json_string(const std::string &s) { return require_json(cJSON_CreateString(s.c_str()), "string"); }
+void *json_string(const std::string &s) { return require_json(json_create_string(s.c_str()), "string"); }
 
-cJSON *json_number(double v) { return require_json(cJSON_CreateNumber(v), "number"); }
+void *json_number(double v) { return require_json(json_create_number(v), "number"); }
 
-cJSON *json_bool(bool v) { return require_json(cJSON_CreateBool(v ? 1 : 0), "bool"); }
+void *json_bool(bool v) { return require_json(json_create_bool(v ? 1 : 0), "bool"); }
 
-cJSON *json_int_array(const std::vector<int> &values) {
-    cJSON *arr = require_json(cJSON_CreateArray(), "int array");
+void *json_int_array(const std::vector<int> &values) {
+    void *arr = require_json(json_create_array(), "int array");
     for (int v : values) {
-        cJSON_AddItemToArray(arr, json_number(v));
+        json_add_item_to_array(arr, json_number(v));
     }
     return arr;
 }
 
-cJSON *json_double_array(const std::vector<double> &values) {
-    cJSON *arr = require_json(cJSON_CreateArray(), "double array");
+void *json_double_array(const std::vector<double> &values) {
+    void *arr = require_json(json_create_array(), "double array");
     for (double v : values) {
-        cJSON_AddItemToArray(arr, json_number(v));
+        json_add_item_to_array(arr, json_number(v));
     }
     return arr;
 }
 
-cJSON *json_float_array_as_double(const std::vector<float> &values) {
-    cJSON *arr = require_json(cJSON_CreateArray(), "float array");
+void *json_float_array_as_double(const std::vector<float> &values) {
+    void *arr = require_json(json_create_array(), "float array");
     for (float v : values) {
-        cJSON_AddItemToArray(arr, json_number(static_cast<double>(v)));
+        json_add_item_to_array(arr, json_number(static_cast<double>(v)));
     }
     return arr;
 }
@@ -216,82 +205,82 @@ int vertex_color_component_count(const std::vector<float> &colors, int vertex_co
     throw std::runtime_error("Vertex color array size mismatch");
 }
 
-cJSON *material_to_json(const scene::SceneMaterialIr &material) {
-    cJSON *root = require_json(cJSON_CreateObject(), "material");
-    cJSON_AddItemToObject(root, "name", json_string(material.name));
+void *material_to_json(const scene::SceneMaterialIr &material) {
+    void *root = require_json(json_create_object(), "material");
+    json_add_item_to_object(root, "name", json_string(material.name));
 
-    cJSON *pbr = require_json(cJSON_CreateObject(), "pbr");
-    cJSON_AddItemToObject(pbr, "baseColorFactor", json_float_array_as_double(material.base_color_factor));
-    cJSON_AddItemToObject(pbr, "metallicFactor", json_number(material.metallic_factor));
-    cJSON_AddItemToObject(pbr, "roughnessFactor", json_number(material.roughness_factor));
+    void *pbr = require_json(json_create_object(), "pbr");
+    json_add_item_to_object(pbr, "baseColorFactor", json_float_array_as_double(material.base_color_factor));
+    json_add_item_to_object(pbr, "metallicFactor", json_number(material.metallic_factor));
+    json_add_item_to_object(pbr, "roughnessFactor", json_number(material.roughness_factor));
     if (material.base_color_texture_index) {
-        cJSON *tex = require_json(cJSON_CreateObject(), "baseColorTexture");
-        cJSON_AddItemToObject(tex, "index", json_number(*material.base_color_texture_index));
-        cJSON_AddItemToObject(pbr, "baseColorTexture", tex);
+        void *tex = require_json(json_create_object(), "baseColorTexture");
+        json_add_item_to_object(tex, "index", json_number(*material.base_color_texture_index));
+        json_add_item_to_object(pbr, "baseColorTexture", tex);
     }
-    cJSON_AddItemToObject(root, "pbrMetallicRoughness", pbr);
-    cJSON_AddItemToObject(root, "emissiveFactor", json_float_array_as_double(material.emissive_factor));
-    cJSON_AddItemToObject(root, "doubleSided", json_bool(material.double_sided));
+    json_add_item_to_object(root, "pbrMetallicRoughness", pbr);
+    json_add_item_to_object(root, "emissiveFactor", json_float_array_as_double(material.emissive_factor));
+    json_add_item_to_object(root, "doubleSided", json_bool(material.double_sided));
     if (material.alpha_mode) {
-        cJSON_AddItemToObject(root, "alphaMode", json_string(*material.alpha_mode));
+        json_add_item_to_object(root, "alphaMode", json_string(*material.alpha_mode));
     }
     return root;
 }
 
-cJSON *primitive_to_json(const scene::ScenePrimitiveIr &primitive, BinaryBufferBuilder &buffer_builder, cJSON *buffer_views,
-                         cJSON *accessors) {
+void *primitive_to_json(const scene::ScenePrimitiveIr &primitive, BinaryBufferBuilder &buffer_builder, void *buffer_views,
+                         void *accessors) {
     auto add_buffer_view = [&](const BufferSlice &slice, std::optional<int> target) -> int {
-        const int index = cJSON_GetArraySize(buffer_views);
-        cJSON *json = require_json(cJSON_CreateObject(), "bufferView");
-        cJSON_AddItemToObject(json, "buffer", json_number(0));
-        cJSON_AddItemToObject(json, "byteOffset", json_number(slice.offset));
-        cJSON_AddItemToObject(json, "byteLength", json_number(slice.length));
+        const int index = json_get_array_size(buffer_views);
+        void *json = require_json(json_create_object(), "bufferView");
+        json_add_item_to_object(json, "buffer", json_number(0));
+        json_add_item_to_object(json, "byteOffset", json_number(slice.offset));
+        json_add_item_to_object(json, "byteLength", json_number(slice.length));
         if (target) {
-            cJSON_AddItemToObject(json, "target", json_number(*target));
+            json_add_item_to_object(json, "target", json_number(*target));
         }
-        cJSON_AddItemToArray(buffer_views, json);
+        json_add_item_to_array(buffer_views, json);
         return index;
     };
 
     auto add_accessor = [&](int buffer_view_index, int component_type, int count, const char *type,
                             const std::optional<std::vector<double>> &min_v,
                             const std::optional<std::vector<double>> &max_v) -> int {
-        const int index = cJSON_GetArraySize(accessors);
-        cJSON *json = require_json(cJSON_CreateObject(), "accessor");
-        cJSON_AddItemToObject(json, "bufferView", json_number(buffer_view_index));
-        cJSON_AddItemToObject(json, "componentType", json_number(component_type));
-        cJSON_AddItemToObject(json, "count", json_number(count));
-        cJSON_AddItemToObject(json, "type", json_string(type));
+        const int index = json_get_array_size(accessors);
+        void *json = require_json(json_create_object(), "accessor");
+        json_add_item_to_object(json, "bufferView", json_number(buffer_view_index));
+        json_add_item_to_object(json, "componentType", json_number(component_type));
+        json_add_item_to_object(json, "count", json_number(count));
+        json_add_item_to_object(json, "type", json_string(type));
         if (min_v) {
-            cJSON_AddItemToObject(json, "min", json_double_array(*min_v));
+            json_add_item_to_object(json, "min", json_double_array(*min_v));
         }
         if (max_v) {
-            cJSON_AddItemToObject(json, "max", json_double_array(*max_v));
+            json_add_item_to_object(json, "max", json_double_array(*max_v));
         }
-        cJSON_AddItemToArray(accessors, json);
+        json_add_item_to_array(accessors, json);
         return index;
     };
 
-    cJSON *attributes = require_json(cJSON_CreateObject(), "attributes");
+    void *attributes = require_json(json_create_object(), "attributes");
     const auto positions_slice = buffer_builder.append_float_array(primitive.positions);
     const int positions_view = add_buffer_view(positions_slice, 34962);
     const int position_count = static_cast<int>(primitive.positions.size() / 3);
     const auto position_min = list_of_component_extremes(primitive.positions, 3, true);
     const auto position_max = list_of_component_extremes(primitive.positions, 3, false);
-    cJSON_AddItemToObject(attributes, "POSITION",
+    json_add_item_to_object(attributes, "POSITION",
                           json_number(add_accessor(positions_view, 5126, position_count, "VEC3", position_min, position_max)));
 
     if (primitive.normals) {
         const auto slice = buffer_builder.append_float_array(*primitive.normals);
         const int view = add_buffer_view(slice, 34962);
-        cJSON_AddItemToObject(attributes, "NORMAL",
+        json_add_item_to_object(attributes, "NORMAL",
                               json_number(add_accessor(view, 5126, static_cast<int>(primitive.normals->size() / 3), "VEC3",
                                                        std::nullopt, std::nullopt)));
     }
     if (primitive.tex_coords0) {
         const auto slice = buffer_builder.append_float_array(*primitive.tex_coords0);
         const int view = add_buffer_view(slice, 34962);
-        cJSON_AddItemToObject(attributes, "TEXCOORD_0",
+        json_add_item_to_object(attributes, "TEXCOORD_0",
                               json_number(add_accessor(view, 5126, static_cast<int>(primitive.tex_coords0->size() / 2),
                                                        "VEC2", std::nullopt, std::nullopt)));
     }
@@ -300,7 +289,7 @@ cJSON *primitive_to_json(const scene::ScenePrimitiveIr &primitive, BinaryBufferB
         const auto slice = buffer_builder.append_float_array(*primitive.vertex_colors);
         const int view = add_buffer_view(slice, 34962);
         const char *type = component_count == 4 ? "VEC4" : "VEC3";
-        cJSON_AddItemToObject(attributes, "COLOR_0",
+        json_add_item_to_object(attributes, "COLOR_0",
                               json_number(add_accessor(view, 5126,
                                                        static_cast<int>(primitive.vertex_colors->size() / component_count),
                                                        type, std::nullopt, std::nullopt)));
@@ -319,11 +308,11 @@ cJSON *primitive_to_json(const scene::ScenePrimitiveIr &primitive, BinaryBufferB
         add_accessor(indices_view, index_component_type, static_cast<int>(primitive.indices.size()), "SCALAR",
                      std::nullopt, std::nullopt);
 
-    cJSON *root = require_json(cJSON_CreateObject(), "primitive");
-    cJSON_AddItemToObject(root, "attributes", attributes);
-    cJSON_AddItemToObject(root, "indices", json_number(indices_accessor));
+    void *root = require_json(json_create_object(), "primitive");
+    json_add_item_to_object(root, "attributes", attributes);
+    json_add_item_to_object(root, "indices", json_number(indices_accessor));
     if (primitive.material_index) {
-        cJSON_AddItemToObject(root, "material", json_number(*primitive.material_index));
+        json_add_item_to_object(root, "material", json_number(*primitive.material_index));
     }
     return root;
 }
@@ -488,20 +477,20 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
     fs::create_directories(output_dir);
 
     BinaryBufferBuilder buffer_builder;
-    CJsonPtr root(require_json(cJSON_CreateObject(), "root"));
-    cJSON *buffer_views = require_json(cJSON_CreateArray(), "bufferViews");
-    cJSON *accessors = require_json(cJSON_CreateArray(), "accessors");
-    cJSON *meshes_json = require_json(cJSON_CreateArray(), "meshes");
+    JsonPtr root(require_json(json_create_object(), "root"));
+    void *buffer_views = require_json(json_create_array(), "bufferViews");
+    void *accessors = require_json(json_create_array(), "accessors");
+    void *meshes_json = require_json(json_create_array(), "meshes");
 
     for (const auto &mesh : scene.meshes) {
-        cJSON *mesh_json = require_json(cJSON_CreateObject(), "mesh");
-        cJSON_AddItemToObject(mesh_json, "name", json_string(mesh.name));
-        cJSON *prims = require_json(cJSON_CreateArray(), "primitives");
+        void *mesh_json = require_json(json_create_object(), "mesh");
+        json_add_item_to_object(mesh_json, "name", json_string(mesh.name));
+        void *prims = require_json(json_create_array(), "primitives");
         for (const auto &primitive : mesh.primitives) {
-            cJSON_AddItemToArray(prims, primitive_to_json(primitive, buffer_builder, buffer_views, accessors));
+            json_add_item_to_array(prims, primitive_to_json(primitive, buffer_builder, buffer_views, accessors));
         }
-        cJSON_AddItemToObject(mesh_json, "primitives", prims);
-        cJSON_AddItemToArray(meshes_json, mesh_json);
+        json_add_item_to_object(mesh_json, "primitives", prims);
+        json_add_item_to_array(meshes_json, mesh_json);
     }
 
     std::vector<std::string> image_uris;
@@ -534,15 +523,15 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
                     }
                     if (extension == ".png") {
                         int w = 0, h = 0, n = 0;
-                        unsigned char *data = stbi_load(source_path.string().c_str(), &w, &h, &n, 4);
+                        unsigned char *data = image_load_file(source_path.string().c_str(), &w, &h, &n, 4);
                         if (!data || w <= 0 || h <= 0) {
                             if (data) {
-                                stbi_image_free(data);
+                                image_free_pixels(data);
                             }
                             throw std::runtime_error("Failed to decode pattern PNG: " + source_path.string());
                         }
                         std::vector<std::uint8_t> rgba(data, data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4u);
-                        stbi_image_free(data);
+                        image_free_pixels(data);
                         encoded = encode_rgba_png(w, h, rgba, png_compression_level);
                     } else {
                         encoded = read_file_bytes(source_path);
@@ -551,12 +540,12 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
                     throw std::runtime_error("Image has no source");
                 }
                 const BufferSlice slice = buffer_builder.append_bytes(encoded);
-                const int view_index = cJSON_GetArraySize(buffer_views);
-                cJSON *view = require_json(cJSON_CreateObject(), "image bufferView");
-                cJSON_AddItemToObject(view, "buffer", json_number(0));
-                cJSON_AddItemToObject(view, "byteOffset", json_number(slice.offset));
-                cJSON_AddItemToObject(view, "byteLength", json_number(slice.length));
-                cJSON_AddItemToArray(buffer_views, view);
+                const int view_index = json_get_array_size(buffer_views);
+                void *view = require_json(json_create_object(), "image bufferView");
+                json_add_item_to_object(view, "buffer", json_number(0));
+                json_add_item_to_object(view, "byteOffset", json_number(slice.offset));
+                json_add_item_to_object(view, "byteLength", json_number(slice.length));
+                json_add_item_to_array(buffer_views, view);
                 image_buffer_views[i] = view_index;
                 image_mime_types[i] = std::move(mime);
             }
@@ -588,16 +577,16 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
                     }
                     if (extension == ".png") {
                         int w = 0, h = 0, n = 0;
-                        unsigned char *data = stbi_load(source_path.string().c_str(), &w, &h, &n, 4);
+                        unsigned char *data = image_load_file(source_path.string().c_str(), &w, &h, &n, 4);
                         if (!data || w <= 0 || h <= 0) {
                             if (data) {
-                                stbi_image_free(data);
+                                image_free_pixels(data);
                             }
                             throw std::runtime_error("Failed to decode pattern PNG: " + source_path.string());
                         }
                         std::vector<std::uint8_t> rgba(
                             data, data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4u);
-                        stbi_image_free(data);
+                        image_free_pixels(data);
                         util::PngWriter::write_rgba(target.string(), w, h, rgba, png_compression_level);
                     } else {
                         fs::copy_file(source_path, target,
@@ -613,149 +602,149 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
     // Final BIN chunk length must include padding used by GLB packing.
     buffer_builder.align_public(4);
 
-    cJSON *cameras_json = require_json(cJSON_CreateArray(), "cameras");
+    void *cameras_json = require_json(json_create_array(), "cameras");
     for (const auto &camera : scene.cameras) {
         if (!camera.perspective) {
             continue;
         }
-        cJSON *cam = require_json(cJSON_CreateObject(), "camera");
-        cJSON_AddItemToObject(cam, "name", json_string(camera.name));
-        cJSON_AddItemToObject(cam, "type", json_string("perspective"));
-        cJSON *perspective = require_json(cJSON_CreateObject(), "perspective");
-        cJSON_AddItemToObject(perspective, "yfov", json_number(camera.perspective->yfov_radians));
-        cJSON_AddItemToObject(perspective, "znear", json_number(camera.perspective->znear));
+        void *cam = require_json(json_create_object(), "camera");
+        json_add_item_to_object(cam, "name", json_string(camera.name));
+        json_add_item_to_object(cam, "type", json_string("perspective"));
+        void *perspective = require_json(json_create_object(), "perspective");
+        json_add_item_to_object(perspective, "yfov", json_number(camera.perspective->yfov_radians));
+        json_add_item_to_object(perspective, "znear", json_number(camera.perspective->znear));
         if (camera.perspective->aspect_ratio) {
-            cJSON_AddItemToObject(perspective, "aspectRatio", json_number(*camera.perspective->aspect_ratio));
+            json_add_item_to_object(perspective, "aspectRatio", json_number(*camera.perspective->aspect_ratio));
         }
         if (camera.perspective->zfar) {
-            cJSON_AddItemToObject(perspective, "zfar", json_number(*camera.perspective->zfar));
+            json_add_item_to_object(perspective, "zfar", json_number(*camera.perspective->zfar));
         }
-        cJSON_AddItemToObject(cam, "perspective", perspective);
-        cJSON_AddItemToArray(cameras_json, cam);
+        json_add_item_to_object(cam, "perspective", perspective);
+        json_add_item_to_array(cameras_json, cam);
     }
 
-    cJSON *nodes_json = require_json(cJSON_CreateArray(), "nodes");
+    void *nodes_json = require_json(json_create_array(), "nodes");
     for (const auto &node : scene.nodes) {
-        cJSON *n = require_json(cJSON_CreateObject(), "node");
-        cJSON_AddItemToObject(n, "name", json_string(node.name));
+        void *n = require_json(json_create_object(), "node");
+        json_add_item_to_object(n, "name", json_string(node.name));
         if (node.translation) {
-            cJSON_AddItemToObject(n, "translation", json_float_array_as_double(*node.translation));
+            json_add_item_to_object(n, "translation", json_float_array_as_double(*node.translation));
         }
         if (node.rotation) {
-            cJSON_AddItemToObject(n, "rotation", json_float_array_as_double(*node.rotation));
+            json_add_item_to_object(n, "rotation", json_float_array_as_double(*node.rotation));
         }
         if (node.scale) {
-            cJSON_AddItemToObject(n, "scale", json_float_array_as_double(*node.scale));
+            json_add_item_to_object(n, "scale", json_float_array_as_double(*node.scale));
         }
         if (node.matrix && !node.translation && !node.rotation && !node.scale) {
-            cJSON_AddItemToObject(n, "matrix", json_double_array(scene::row_major_to_column_major_list(*node.matrix)));
+            json_add_item_to_object(n, "matrix", json_double_array(scene::row_major_to_column_major_list(*node.matrix)));
         }
         if (node.mesh_index) {
-            cJSON_AddItemToObject(n, "mesh", json_number(*node.mesh_index));
+            json_add_item_to_object(n, "mesh", json_number(*node.mesh_index));
         }
         if (node.camera_index) {
-            cJSON_AddItemToObject(n, "camera", json_number(*node.camera_index));
+            json_add_item_to_object(n, "camera", json_number(*node.camera_index));
         }
         if (!node.children.empty()) {
-            cJSON_AddItemToObject(n, "children", json_int_array(node.children));
+            json_add_item_to_object(n, "children", json_int_array(node.children));
         }
-        cJSON_AddItemToArray(nodes_json, n);
+        json_add_item_to_array(nodes_json, n);
     }
 
-    cJSON *materials_json = require_json(cJSON_CreateArray(), "materials");
+    void *materials_json = require_json(json_create_array(), "materials");
     for (const auto &material : scene.materials) {
-        cJSON_AddItemToArray(materials_json, material_to_json(material));
+        json_add_item_to_array(materials_json, material_to_json(material));
     }
 
-    cJSON *textures_json = require_json(cJSON_CreateArray(), "textures");
+    void *textures_json = require_json(json_create_array(), "textures");
     for (const auto &texture : scene.textures) {
-        cJSON *t = require_json(cJSON_CreateObject(), "texture");
-        cJSON_AddItemToObject(t, "name", json_string(texture.name));
-        cJSON_AddItemToObject(t, "source", json_number(texture.image_index));
+        void *t = require_json(json_create_object(), "texture");
+        json_add_item_to_object(t, "name", json_string(texture.name));
+        json_add_item_to_object(t, "source", json_number(texture.image_index));
         if (texture.sampler_index) {
-            cJSON_AddItemToObject(t, "sampler", json_number(*texture.sampler_index));
+            json_add_item_to_object(t, "sampler", json_number(*texture.sampler_index));
         }
-        cJSON_AddItemToArray(textures_json, t);
+        json_add_item_to_array(textures_json, t);
     }
 
-    cJSON *images_json = require_json(cJSON_CreateArray(), "images");
+    void *images_json = require_json(json_create_array(), "images");
     for (std::size_t i = 0; i < scene.images.size(); ++i) {
-        cJSON *im = require_json(cJSON_CreateObject(), "image");
-        cJSON_AddItemToObject(im, "name", json_string(scene.images[i].name));
+        void *im = require_json(json_create_object(), "image");
+        json_add_item_to_object(im, "name", json_string(scene.images[i].name));
         if (write_glb) {
-            cJSON_AddItemToObject(im, "mimeType", json_string(image_mime_types[i]));
-            cJSON_AddItemToObject(im, "bufferView", json_number(image_buffer_views[i]));
+            json_add_item_to_object(im, "mimeType", json_string(image_mime_types[i]));
+            json_add_item_to_object(im, "bufferView", json_number(image_buffer_views[i]));
         } else {
-            cJSON_AddItemToObject(im, "uri", json_string(image_uris[i]));
+            json_add_item_to_object(im, "uri", json_string(image_uris[i]));
         }
-        cJSON_AddItemToArray(images_json, im);
+        json_add_item_to_array(images_json, im);
     }
 
-    cJSON *samplers_json = require_json(cJSON_CreateArray(), "samplers");
+    void *samplers_json = require_json(json_create_array(), "samplers");
     for (const auto &sampler : scene.samplers) {
-        cJSON *s = require_json(cJSON_CreateObject(), "sampler");
-        cJSON_AddItemToObject(s, "wrapS", json_number(sampler.wrap_s));
-        cJSON_AddItemToObject(s, "wrapT", json_number(sampler.wrap_t));
+        void *s = require_json(json_create_object(), "sampler");
+        json_add_item_to_object(s, "wrapS", json_number(sampler.wrap_s));
+        json_add_item_to_object(s, "wrapT", json_number(sampler.wrap_t));
         if (sampler.mag_filter) {
-            cJSON_AddItemToObject(s, "magFilter", json_number(*sampler.mag_filter));
+            json_add_item_to_object(s, "magFilter", json_number(*sampler.mag_filter));
         }
         if (sampler.min_filter) {
-            cJSON_AddItemToObject(s, "minFilter", json_number(*sampler.min_filter));
+            json_add_item_to_object(s, "minFilter", json_number(*sampler.min_filter));
         }
-        cJSON_AddItemToArray(samplers_json, s);
+        json_add_item_to_array(samplers_json, s);
     }
 
-    cJSON *asset = require_json(cJSON_CreateObject(), "asset");
-    cJSON_AddItemToObject(asset, "version", json_string("2.0"));
-    cJSON_AddItemToObject(asset, "generator", json_string("slop"));
-    cJSON_AddItemToObject(root.get(), "asset", asset);
-    cJSON_AddItemToObject(root.get(), "scene", json_number(0));
+    void *asset = require_json(json_create_object(), "asset");
+    json_add_item_to_object(asset, "version", json_string("2.0"));
+    json_add_item_to_object(asset, "generator", json_string("m3g"));
+    json_add_item_to_object(root.get(), "asset", asset);
+    json_add_item_to_object(root.get(), "scene", json_number(0));
 
-    cJSON *scenes = require_json(cJSON_CreateArray(), "scenes");
-    cJSON *scene0 = require_json(cJSON_CreateObject(), "scene0");
-    cJSON_AddItemToObject(scene0, "nodes", json_int_array(scene.root_node_indices));
-    cJSON_AddItemToArray(scenes, scene0);
-    cJSON_AddItemToObject(root.get(), "scenes", scenes);
+    void *scenes = require_json(json_create_array(), "scenes");
+    void *scene0 = require_json(json_create_object(), "scene0");
+    json_add_item_to_object(scene0, "nodes", json_int_array(scene.root_node_indices));
+    json_add_item_to_array(scenes, scene0);
+    json_add_item_to_object(root.get(), "scenes", scenes);
 
-    cJSON_AddItemToObject(root.get(), "nodes", nodes_json);
-    cJSON_AddItemToObject(root.get(), "meshes", meshes_json);
+    json_add_item_to_object(root.get(), "nodes", nodes_json);
+    json_add_item_to_object(root.get(), "meshes", meshes_json);
 
     auto add_buffer_view = [&](const BufferSlice &slice) -> int {
-        const int index = cJSON_GetArraySize(buffer_views);
-        cJSON *json = require_json(cJSON_CreateObject(), "bufferView");
-        cJSON_AddItemToObject(json, "buffer", json_number(0));
-        cJSON_AddItemToObject(json, "byteOffset", json_number(slice.offset));
-        cJSON_AddItemToObject(json, "byteLength", json_number(slice.length));
-        cJSON_AddItemToArray(buffer_views, json);
+        const int index = json_get_array_size(buffer_views);
+        void *json = require_json(json_create_object(), "bufferView");
+        json_add_item_to_object(json, "buffer", json_number(0));
+        json_add_item_to_object(json, "byteOffset", json_number(slice.offset));
+        json_add_item_to_object(json, "byteLength", json_number(slice.length));
+        json_add_item_to_array(buffer_views, json);
         return index;
     };
     auto add_accessor = [&](int buffer_view_index, int component_type, int count, const char *type,
                             const std::optional<std::vector<double>> &min_v,
                             const std::optional<std::vector<double>> &max_v) -> int {
-        const int index = cJSON_GetArraySize(accessors);
-        cJSON *json = require_json(cJSON_CreateObject(), "accessor");
-        cJSON_AddItemToObject(json, "bufferView", json_number(buffer_view_index));
-        cJSON_AddItemToObject(json, "componentType", json_number(component_type));
-        cJSON_AddItemToObject(json, "count", json_number(count));
-        cJSON_AddItemToObject(json, "type", json_string(type));
+        const int index = json_get_array_size(accessors);
+        void *json = require_json(json_create_object(), "accessor");
+        json_add_item_to_object(json, "bufferView", json_number(buffer_view_index));
+        json_add_item_to_object(json, "componentType", json_number(component_type));
+        json_add_item_to_object(json, "count", json_number(count));
+        json_add_item_to_object(json, "type", json_string(type));
         if (min_v) {
-            cJSON_AddItemToObject(json, "min", json_double_array(*min_v));
+            json_add_item_to_object(json, "min", json_double_array(*min_v));
         }
         if (max_v) {
-            cJSON_AddItemToObject(json, "max", json_double_array(*max_v));
+            json_add_item_to_object(json, "max", json_double_array(*max_v));
         }
-        cJSON_AddItemToArray(accessors, json);
+        json_add_item_to_array(accessors, json);
         return index;
     };
 
-    cJSON *animations_json = require_json(cJSON_CreateArray(), "animations");
+    void *animations_json = require_json(json_create_array(), "animations");
     for (const auto &animation : scene.animations) {
         if (animation.channels.empty() || animation.samplers.empty()) {
             continue;
         }
-        cJSON *anim = require_json(cJSON_CreateObject(), "animation");
-        cJSON_AddItemToObject(anim, "name", json_string(animation.name));
-        cJSON *samplers_json_anim = require_json(cJSON_CreateArray(), "animation samplers");
+        void *anim = require_json(json_create_object(), "animation");
+        json_add_item_to_object(anim, "name", json_string(animation.name));
+        void *samplers_json_anim = require_json(json_create_array(), "animation samplers");
         for (const auto &sampler : animation.samplers) {
             const auto time_slice = buffer_builder.append_float_array(sampler.times);
             const int time_view = add_buffer_view(time_slice);
@@ -772,73 +761,73 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
             const int value_acc =
                 add_accessor(value_view, 5126, value_count, type, std::nullopt, std::nullopt);
 
-            cJSON *s = require_json(cJSON_CreateObject(), "animation sampler");
-            cJSON_AddItemToObject(s, "input", json_number(time_acc));
-            cJSON_AddItemToObject(s, "output", json_number(value_acc));
-            cJSON_AddItemToObject(s, "interpolation", json_string(sampler.interpolation));
-            cJSON_AddItemToArray(samplers_json_anim, s);
+            void *s = require_json(json_create_object(), "animation sampler");
+            json_add_item_to_object(s, "input", json_number(time_acc));
+            json_add_item_to_object(s, "output", json_number(value_acc));
+            json_add_item_to_object(s, "interpolation", json_string(sampler.interpolation));
+            json_add_item_to_array(samplers_json_anim, s);
         }
-        cJSON *channels_json = require_json(cJSON_CreateArray(), "animation channels");
+        void *channels_json = require_json(json_create_array(), "animation channels");
         for (const auto &channel : animation.channels) {
-            cJSON *ch = require_json(cJSON_CreateObject(), "animation channel");
-            cJSON_AddItemToObject(ch, "sampler", json_number(channel.sampler_index));
-            cJSON *target = require_json(cJSON_CreateObject(), "animation target");
-            cJSON_AddItemToObject(target, "node", json_number(channel.node_index));
-            cJSON_AddItemToObject(target, "path", json_string(channel.path));
-            cJSON_AddItemToObject(ch, "target", target);
-            cJSON_AddItemToArray(channels_json, ch);
+            void *ch = require_json(json_create_object(), "animation channel");
+            json_add_item_to_object(ch, "sampler", json_number(channel.sampler_index));
+            void *target = require_json(json_create_object(), "animation target");
+            json_add_item_to_object(target, "node", json_number(channel.node_index));
+            json_add_item_to_object(target, "path", json_string(channel.path));
+            json_add_item_to_object(ch, "target", target);
+            json_add_item_to_array(channels_json, ch);
         }
-        cJSON_AddItemToObject(anim, "samplers", samplers_json_anim);
-        cJSON_AddItemToObject(anim, "channels", channels_json);
-        cJSON_AddItemToArray(animations_json, anim);
+        json_add_item_to_object(anim, "samplers", samplers_json_anim);
+        json_add_item_to_object(anim, "channels", channels_json);
+        json_add_item_to_array(animations_json, anim);
     }
 
-    cJSON_AddItemToObject(root.get(), "accessors", accessors);
-    cJSON_AddItemToObject(root.get(), "bufferViews", buffer_views);
+    json_add_item_to_object(root.get(), "accessors", accessors);
+    json_add_item_to_object(root.get(), "bufferViews", buffer_views);
 
-    cJSON *buffers = require_json(cJSON_CreateArray(), "buffers");
-    cJSON *buffer0 = require_json(cJSON_CreateObject(), "buffer0");
+    void *buffers = require_json(json_create_array(), "buffers");
+    void *buffer0 = require_json(json_create_object(), "buffer0");
     if (!write_glb) {
-        cJSON_AddItemToObject(buffer0, "uri", json_string(bin_path.filename().string()));
+        json_add_item_to_object(buffer0, "uri", json_string(bin_path.filename().string()));
     }
-    cJSON_AddItemToObject(buffer0, "byteLength", json_number(buffer_builder.size()));
-    cJSON_AddItemToArray(buffers, buffer0);
-    cJSON_AddItemToObject(root.get(), "buffers", buffers);
+    json_add_item_to_object(buffer0, "byteLength", json_number(buffer_builder.size()));
+    json_add_item_to_array(buffers, buffer0);
+    json_add_item_to_object(root.get(), "buffers", buffers);
 
-    if (cJSON_GetArraySize(materials_json) > 0) {
-        cJSON_AddItemToObject(root.get(), "materials", materials_json);
+    if (json_get_array_size(materials_json) > 0) {
+        json_add_item_to_object(root.get(), "materials", materials_json);
     } else {
-        cJSON_Delete(materials_json);
+        json_delete(materials_json);
     }
-    if (cJSON_GetArraySize(textures_json) > 0) {
-        cJSON_AddItemToObject(root.get(), "textures", textures_json);
+    if (json_get_array_size(textures_json) > 0) {
+        json_add_item_to_object(root.get(), "textures", textures_json);
     } else {
-        cJSON_Delete(textures_json);
+        json_delete(textures_json);
     }
-    if (cJSON_GetArraySize(images_json) > 0) {
-        cJSON_AddItemToObject(root.get(), "images", images_json);
+    if (json_get_array_size(images_json) > 0) {
+        json_add_item_to_object(root.get(), "images", images_json);
     } else {
-        cJSON_Delete(images_json);
+        json_delete(images_json);
     }
-    if (cJSON_GetArraySize(samplers_json) > 0) {
-        cJSON_AddItemToObject(root.get(), "samplers", samplers_json);
+    if (json_get_array_size(samplers_json) > 0) {
+        json_add_item_to_object(root.get(), "samplers", samplers_json);
     } else {
-        cJSON_Delete(samplers_json);
+        json_delete(samplers_json);
     }
-    if (cJSON_GetArraySize(cameras_json) > 0) {
-        cJSON_AddItemToObject(root.get(), "cameras", cameras_json);
+    if (json_get_array_size(cameras_json) > 0) {
+        json_add_item_to_object(root.get(), "cameras", cameras_json);
     } else {
-        cJSON_Delete(cameras_json);
+        json_delete(cameras_json);
     }
-    if (cJSON_GetArraySize(animations_json) > 0) {
-        cJSON_AddItemToObject(root.get(), "animations", animations_json);
+    if (json_get_array_size(animations_json) > 0) {
+        json_add_item_to_object(root.get(), "animations", animations_json);
     } else {
-        cJSON_Delete(animations_json);
+        json_delete(animations_json);
     }
 
-    std::unique_ptr<char, CJsonPrintDeleter> printed(cJSON_PrintUnformatted(root.get()));
+    std::unique_ptr<char, JsonPrintDeleter> printed(json_print_unformatted(root.get()));
     if (!printed) {
-        throw std::runtime_error("cJSON_PrintUnformatted failed");
+        throw std::runtime_error("json_print_unformatted failed");
     }
 
     if (write_glb) {
@@ -850,9 +839,9 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
                 throw std::runtime_error("Failed to write glTF: " + normalized_output.string());
             }
             // Pretty JSON for .gltf side files.
-            std::unique_ptr<char, CJsonPrintDeleter> pretty(cJSON_Print(root.get()));
+            std::unique_ptr<char, JsonPrintDeleter> pretty(json_print_formatted(root.get()));
             if (!pretty) {
-                throw std::runtime_error("cJSON_Print failed");
+                throw std::runtime_error("json_print_formatted failed");
             }
             out << pretty.get() << '\n';
         }
@@ -879,4 +868,4 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
 }
 
 } // namespace gltf
-} // namespace slop
+} // namespace m3g

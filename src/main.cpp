@@ -1,5 +1,4 @@
-#include <slop/convert.hpp>
-#include <slop/decode.hpp>
+#include <m3g.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -12,7 +11,7 @@
 namespace {
 
 constexpr const char *USAGE =
-    "Usage: slop <input.m3g> <output.{gltf|glb}> [--pattern <image.{png|jpg|jpeg}>] "
+    "Usage: m3g <input.m3g> <output.{gltf|glb}> [--pattern <image.{png|jpg|jpeg}>] "
     "[--png-level <0-9>] [--overwrite] [--verbose]";
 
 struct CommandLine {
@@ -97,7 +96,7 @@ int main(int argc, char **argv) {
     }
 
     try {
-        slop::M3gConverter converter;
+        m3g::Converter converter;
         auto report = converter.convert(command->input_path, command->output_path, command->overwrite,
                                         command->pattern_path, command->png_compression_level);
         const auto &decoded = report.decoded;
@@ -117,7 +116,7 @@ int main(int argc, char **argv) {
             std::cout << "Wrote " << report.paths.gltf_path << '\n';
         }
     } catch (const std::exception &error) {
-        std::cerr << "slop failed: " << error.what() << '\n';
+        std::cerr << "m3g failed: " << error.what() << '\n';
         return 1;
     }
     return 0;

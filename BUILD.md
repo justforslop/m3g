@@ -1,15 +1,22 @@
 # Build
 
-`slop` is built with **Make + g++/gcc** only for the **viewer** (`debug`) and
-**CLI** (`release`) builds.\
+`m3g` is built with **g++/gcc** for the **viewer** (`debug`) and **CLI**
+(`release`) builds. Use either **Make** (`Makefile`) or **Ninja**
+(`build.ninja`) — same outputs and flags.\
 **No CMake** is required to compile, test, or convert M3G files.\
-Most third-party code lives under `vendors/` and is fetched with the Makefile
-`setup` targets.
+Most third-party code lives under `vendors/` and is fetched with the `setup`
+targets (Make or Ninja).
 
 ```bash
+# Make
 make debug      # Sokol + Dear ImGui viewer → build/debug  (default `make`)
-make release    # CLI converter             → build/slop
+make release    # CLI converter             → build/m3g
 make test       # unit tests under tests/bin/
+
+# Ninja (equivalent)
+ninja           # viewer → build/debug  (default)
+ninja release   # CLI    → build/m3g
+ninja test      # unit tests under tests/bin/
 ```
 
 ## Requirements
@@ -18,15 +25,19 @@ make test       # unit tests under tests/bin/
 
 **Toolchain (required for build / release / tests):**
 
-| Tool   | Role                                                             |
-| ------ | ---------------------------------------------------------------- |
-| `g++`  | C++17 compiler (CLI + viewer; `debug.c` is compiled as C++)      |
-| `gcc`  | C99 compiler (app C sources, cJSON, tests)                       |
-| `make` | Build driver (`Makefile`)                                        |
-| `curl` | `make setup` downloads (`-fsSL`)                                 |
-| `7z`   | Unpack miniz / imgui zip archives (`setup-miniz`, `setup-imgui`) |
+| Tool    | Role                                                                  |
+| ------- | --------------------------------------------------------------------- |
+| `g++`   | C++17 compiler (CLI + viewer; `debug.c` is compiled as C++)           |
+| `gcc`   | C99 compiler (app C sources, cJSON, tests)                            |
+| `make`  | Build driver (`Makefile`) — **or**                                    |
+| `ninja` | Build driver (`build.ninja`)                                          |
+| `curl`  | `setup` downloads (`-fsSL`)                                           |
+| `7z`    | Unpack miniz / imgui zip archives (`setup-miniz`, `setup-imgui`)      |
 
-**Not required** for `make debug`, `make release`, or `make test`:
+You need **either** `make` **or** `ninja` (or both). Compilers and `curl`/`7z`
+are the same either way.
+
+**Not required** for debug / release / test builds:
 
 | Tool  | Role if present                                                            |
 | ----- | -------------------------------------------------------------------------- |
@@ -41,7 +52,7 @@ make test       # unit tests under tests/bin/
 | X11 (`libX11`, `libXi`, `libXcursor`) | Viewer window / input (`sokol_app`)          |
 | libdl, libpthread                     | Viewer (dynamic GL, threads)                 |
 
-**CLI** (`build/slop`) links only **libm** (deflate/Adler-32 via vendored **miniz**).\
+**CLI** (`build/m3g`) links only **libm** (deflate/Adler-32 via vendored **miniz**).\
 **Viewer** (`build/debug`) additionally links **OpenGL** and **X11**.
 
 Dear ImGui, Sokol, cJSON, cgltf, stb, and test helpers are **vendored** (not
@@ -57,47 +68,59 @@ In the table below, `→` means **requires** or **installed as a dependency of**
 | ------------------------------------------- | ----------------------------- |
 | **glibc**                                   | `pacman` → `glibc`            |
 | `g++`, `gcc`, `make`                        | `base-devel`                  |
-| **miniz** (vendored)                        | `make setup-miniz`            |
+| **ninja** (optional alternative driver)     | `pacman` → `ninja`            |
+| **miniz** (vendored)                        | `make setup-miniz` / `ninja setup-miniz` |
 | **OpenGL** / Mesa (`libGL`) (viewer)        | `mesa` or a GPU driver stack  |
 | **X11** (`libX11`, `libXi`, `libXcursor`)   | `libx11` `libxi` `libxcursor` |
-| **curl** (`make setup`)                     | `pacman` → `curl`             |
-| **7z** (`make setup-miniz` / `setup-imgui`) | `7zip` or `p7zip`             |
+| **curl** (`setup`)                          | `pacman` → `curl`             |
+| **7z** (`setup-miniz` / `setup-imgui`)      | `7zip` or `p7zip`             |
 
 ### Minimal install
 
 `--needed` skips packages you already have.
 
 ```bash
-sudo pacman -S --needed base-devel curl mesa libx11 libxi libxcursor 7zip
+sudo pacman -S --needed base-devel ninja curl mesa libx11 libxi libxcursor 7zip
 ```
 
 **Vendored sources** — fetch once before the first build (CLI **`curl`**
 required; **`7z`** required for miniz and imgui zips):
 
 ```bash
-make setup
+make setup    # or: ninja setup
 ```
 
 This downloads cgltf, cJSON, stb image headers, Sokol (including sokol-imgui),
-mattias `testfw.h` / `vecmath.h`, miniz, and Dear ImGui into `vendors/`.
+mattias `testfw.h`, miniz, and Dear ImGui (core only) into `vendors/`.
 
 ## Build
 
-Default `make` / `make all` builds the **viewer** (`BUILD=debug`). The CLI is
-`make release`. Toolchain is always **make + g++/gcc**. **Zig is not used.**
+Default builds the **viewer** (debug). The CLI is the **release** target.
+Toolchain is always **g++/gcc**, driven by **Make** or **Ninja**. **Zig is not
+used.**
 
 ```bash
+# Make
 make                # viewer → build/debug
 make debug          # same
 make view           # alias for make debug
-make release        # CLI    → build/slop
+make release        # CLI    → build/m3g
 make clean          # rm -rf build tests/bin
+
+# Ninja
+ninja               # viewer → build/debug
+ninja debug         # same
+ninja view          # alias for debug
+ninja release       # CLI    → build/m3g
+ninja -t clean      # remove ninja-known outputs
+# full wipe (matches make clean):
+rm -rf build tests/bin
 ```
 
-| Target         | Binary        | Flags                  | Links                                      |
-| -------------- | ------------- | ---------------------- | ------------------------------------------ |
-| `make debug`   | `build/debug` | `-O0 -g` (C++17 + C99) | m, GL, X11, Xi, Xcursor, dl, pthread |
-| `make release` | `build/slop`  | `-Os -g0 -DNDEBUG`     | m                                    |
+| Target (Make / Ninja) | Binary        | Flags                  | Links                                |
+| --------------------- | ------------- | ---------------------- | ------------------------------------ |
+| `debug` / `view`      | `build/debug` | `-O0 -g` (C++17 + C99) | m, GL, X11, Xi, Xcursor, dl, pthread |
+| `release`             | `build/m3g`  | `-Os -g0 -DNDEBUG`     | m                                    |
 
 Object files live under `build/obj/<debug\|release>/` so `build/debug` can be
 the viewer executable (not a directory).
@@ -107,16 +130,53 @@ Release compiles `src/*.cpp` and `src/*.c` (except `src/debug.c`) plus
 objects (minus `main.o`)
 with `src/debug.c` (as C++) and Dear ImGui.
 
+### Public API header (`include/m3g.hpp`)
+
+Decode is **sokol / stb style**: declarations always; implementation once.
+
+```cpp
+// exactly one .cpp in the link:
+#define M3G_IMPL
+#include <m3g.hpp>
+// header enables M3G_DECODE_IMPL, then #undef M3G_IMPL
+
+// every other TU:
+#include <m3g.hpp>
+
+m3g::decode::Decoder dec;
+auto decoded = dec.decode_file("model.m3g");
+```
+
+The tree’s impl unit is `src/decode/decoder.cpp` (defines `M3G_IMPL`).
+`m3g.hpp` does **not** include miniz or stb_image.
+
+**Callbacks (backends):**
+
+| Concern | API | Optional adapter in tree |
+| -------- | --- | ------------------------ |
+| zlib/deflate (sections, embedded images) | `m3g::DeflateIo` / `set_deflate_io` | `src/deflate_io_miniz.cpp` → `install_miniz_deflate_io()` |
+| raster decode | `m3g::ImageIo` / `set_image_io` | `src/image_io_stb.cpp` → `install_stb_image_io()` |
+| JSON build (glTF export) | `m3g::JsonIo` / `set_json_io` | `src/json_io_cjson.cpp` → `install_cjson_json_io()` |
+
+Both adapters auto-register via static init when linked. PNG **write** still
+uses `stb_image_write` in `src/util/png_writer.cpp` / glTF export for now.
+
+Convert/export remain separate translation units for now.
+
 ### Cross-compilation (gcc)
 
 Use a **gcc** target triple via `CROSS_COMPILE` (or set `CC` / `CXX` yourself).
-No Zig, no CMake.
+No Zig, no CMake. Cross flags are wired through the **Makefile**; with Ninja,
+override `cc` / `cxx` on the command line:
 
 ```bash
-# Example: aarch64 Linux
+# Make — example: aarch64 Linux
 make release CROSS_COMPILE=aarch64-linux-gnu- CXX=aarch64-linux-gnu-g++
 
-# Viewer still needs target OpenGL/X11 (or skip make debug on a headless cross)
+# Ninja — override top-level cc/cxx variables
+ninja release cc=aarch64-linux-gnu-gcc cxx=aarch64-linux-gnu-g++
+
+# Viewer still needs target OpenGL/X11 (or skip debug on a headless cross)
 ```
 
 You need **target** headers and libraries (`libz`, and for the viewer `libGL` /
@@ -138,30 +198,30 @@ Do **not** use CMake for the normal viewer/CLI workflow. Do **not** use Zig.
 **Viewer** (Sokol + ImGui; orbit with LMB, zoom with wheel):
 
 ```bash
-make debug
+make debug    # or: ninja
 ./build/debug assets/90.m3g
 ```
 
 **CLI** (M3G → glTF / GLB):
 
 ```bash
-make release
-./build/slop assets/90.m3g out.glb --overwrite
-./build/slop assets/90.m3g out.gltf --pattern texture.png --overwrite --verbose
+make release  # or: ninja release
+./build/m3g assets/90.m3g out.glb --overwrite
+./build/m3g assets/90.m3g out.gltf --pattern texture.png --overwrite --verbose
 ```
 
 Usage:
 
 ```text
-slop <input.m3g> <output.{gltf|glb}> [--pattern <image.{png|jpg|jpeg}>] [--overwrite] [--verbose]
+m3g <input.m3g> <output.{gltf|glb}> [--pattern <image.{png|jpg|jpeg}>] [--overwrite] [--verbose]
 ```
 
 ## Tests
 
-Tests live under `tests/NNN_*.c` (or `NNN-*.c`). `make test` compiles each
-selected file (plus `tests/impl.c`) into `tests/bin/` and runs the binaries.
-CMake is not required. Unit tests link only helpers / vendored headers (no
-OpenGL or X11).
+Tests live under `tests/NNN_*.c` (or `NNN-*.c`). `make test` or `ninja test`
+compiles each selected file (plus `tests/impl.c`) into `tests/bin/` and runs
+the binaries. CMake is not required. Unit tests link only helpers / vendored
+headers (no OpenGL or X11).
 
 ### Compiler (musl if present, else glibc gcc)
 
@@ -178,10 +238,12 @@ Override at any time:
 ```bash
 make test TEST_CC=gcc          # force glibc gcc
 make test TEST_CC=musl-gcc     # force musl
+# Ninja: override the `test_cc` variable
+ninja test test_cc=musl-gcc
 ```
 
-This does **not** switch the **app** build (`make debug` / `release`). Those
-stay on `$(CXX)` / `$(CC)` and link distro shared libraries.
+This does **not** switch the **app** build (`debug` / `release`). Those stay on
+`$(CXX)` / `$(CC)` (or Ninja `cxx` / `cc`) and link distro shared libraries.
 
 Optional package on Arch if you want musl test builds:
 
@@ -192,7 +254,7 @@ sudo pacman -S --needed musl   # provides musl-gcc
 Run all tests:
 
 ```bash
-make test
+make test     # or: ninja test
 ```
 
 Run **one or more** tests by number:
@@ -201,16 +263,20 @@ Run **one or more** tests by number:
 make test n=1      # tests/001_* only
 make test n=2,3    # tests/002_* and 003_*
 make test n="2, 3" # same (spaces allowed if quoted)
+n=1 ninja test     # Ninja: pass filters as env vars
+n=2,3 ninja test
 ```
 
 Run **from a test onward**:
 
 ```bash
 make test s=1   # tests/001_* and all higher-numbered tests
+s=1 ninja test
 ```
 
 `n` and `s` are mutually exclusive (`n` wins if both are set). Needs a C
-compiler as above and `vendors/libs/testfw.h` (`make setup-libs`).
+compiler as above and `vendors/libs/testfw.h` (`make setup-libs` or
+`ninja setup-libs`).
 
 ## Editor / LSP support
 
@@ -221,29 +287,35 @@ cmake -S . -B build
 # compile_commands.json is generated in build/ (CMAKE_EXPORT_COMPILE_COMMANDS)
 ```
 
-## Makefile targets
+## Targets (Make and Ninja)
+
+Same target names work with both drivers (`make <target>` or `ninja <target>`),
+except clean (see below).
 
 | Target              | Action                                          |
 | ------------------- | ----------------------------------------------- |
-| `make` / `make all` | Viewer (`build/debug`)                          |
-| `make debug`        | Same as `make view` — Sokol + ImGui viewer      |
-| `make view`         | Alias for `make debug`                          |
-| `make release`      | CLI converter `build/slop`                      |
-| `make test`         | Run tests (`n=` / `s=` filters; see **Tests**)  |
+| `all` (default)     | Viewer (`build/debug`)                          |
+| `debug`             | Same as `view` — Sokol + ImGui viewer           |
+| `view`              | Alias for `debug`                               |
+| `release`           | CLI converter `build/m3g`                      |
+| `test`              | Run tests (`n=` / `s=` filters; see **Tests**)  |
+| `setup`             | Fetch all vendors (run once before first build) |
 | `make clean`        | Remove `build/` and `tests/bin/`                |
-| `make setup`        | Fetch all vendors (run once before first build) |
+| `ninja -t clean`    | Remove outputs known to Ninja                   |
 
 ### Vendor setup
 
-| Target             | Fetches                                                                     |
-| ------------------ | --------------------------------------------------------------------------- |
-| `make setup`       | All vendors below                                                           |
-| `make setup-libs`  | `testfw.h`, `vecmath.h`                                                     |
-| `make setup-cgltf` | `cgltf.h`, `cgltf_write.h`                                                  |
-| `make setup-cjson` | `cJSON.c`, `cJSON.h`                                                        |
-| `make setup-stb`   | `stb_image.h`, `stb_image_write.h`, `stb_image_resize2.h`                   |
-| `make setup-sokol` | Sokol headers + `sokol_imgui.h` / `sokol_gfx_imgui.h` / `sokol_app_imgui.h` |
-| `make setup-miniz` | miniz 3.1.2 zip (needs `7z`)                                                |
-| `make setup-imgui` | Dear ImGui 1.92.9b zip (needs `7z`)                                         |
+| Target        | Fetches                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------ |
+| `setup`       | All vendors below                                                                                |
+| `setup-libs`  | `testfw.h` (unit tests)                                                                          |
+| `setup-cgltf` | `cgltf.h` (glTF validate)                                                                        |
+| `setup-cjson` | `cJSON.c`, `cJSON.h`                                                                             |
+| `setup-stb`   | `stb_image.h`, `stb_image_write.h`                                                               |
+| `setup-sokol` | Viewer only: `sokol_app/gfx/glue/log/time`, `sokol_gl`, sokol-imgui trio                          |
+| `setup-miniz` | miniz 3.1.2 zip (needs `7z`; examples/docs stripped)                                             |
+| `setup-imgui` | Dear ImGui 1.92.9b zip (needs `7z`; backends/docs/examples/misc/demo stripped)                   |
 
-Re-run the relevant target to refresh a single vendor.
+Re-run the relevant target to refresh a single vendor. Ninja records setup
+stamps under `build/setup/` so vendor files are not re-downloaded on every
+compile.

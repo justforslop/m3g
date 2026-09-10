@@ -1,0 +1,313 @@
+# m3g — M3G decoder / glTF converter (C++17)
+# Ninja translation of Makefile
+#
+# Build:
+#   ninja            # viewer -> build/debug  (sokol)
+#   ninja debug      # same
+#   ninja view       # same as debug
+#   ninja release    # CLI    -> build/m3g
+#   ninja -t clean
+#
+# Viewer:
+#   ./build/debug assets/90.m3g
+#
+# Vendored headers:
+#   ninja setup
+#
+# Tests:
+#   ninja test
+#   ninja test  - or pass filters via env: n=1,2 s=10 ninja test-run
+#
+# Object files live under build/obj/<config>/ so build/debug can be the binary.
+
+ninja_required_version = 1.5
+
+cxx = c++
+cc = gcc
+app = m3g
+buildroot = build
+srcdir = src
+incdir = include
+test_bindir = tests/bin
+
+miniz_tag = 3.1.2
+miniz_url = https://github.com/richgel999/miniz/releases/download/${miniz_tag}/miniz-${miniz_tag}.zip
+miniz_archive = ${buildroot}/miniz-${miniz_tag}.zip
+miniz_dir = vendors/miniz
+miniz_stamp = ${miniz_dir}/.extracted
+
+imgui_tag = 1.92.9b
+imgui_url = https://github.com/ocornut/imgui/archive/refs/tags/v${imgui_tag}.zip
+imgui_archive = ${buildroot}/imgui-${imgui_tag}.zip
+imgui_dir = vendors/imgui
+imgui_stamp = ${imgui_dir}/.extracted
+
+app_cppflags = -I. -I${incdir} -I${srcdir} -Ivendors -Ivendors/libs -Ivendors/miniz
+view_cppflags = $app_cppflags -Ivendors/imgui
+app_ldflags =
+app_libs = -lm
+view_libs = $app_libs -lGL -lX11 -lXi -lXcursor -ldl -lpthread
+
+cxxflags_debug = -std=c++17 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE -DAPP_NAME=\"${app}\"
+cxxflags_release = -std=c++17 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE -DAPP_NAME=\"${app}\"
+cflags_debug = -std=c99 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE
+cflags_release = -std=c99 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE
+
+test_cflags = -std=c99 -Wall -Wextra -g -D_DEFAULT_SOURCE
+test_includes = -I. -Iinclude -Ivendors/libs
+test_impl = tests/impl.c
+
+# Prefer musl-gcc for tests when available (matches Makefile).
+test_cc = gcc
+
+# ---------------------------------------------------------------------------
+# rules
+# ---------------------------------------------------------------------------
+
+rule cxx_debug
+  command = $cxx $cxxflags_debug $app_cppflags -c -o $out $in
+  description = CXX(debug) $in
+
+rule cxx_release
+  command = $cxx $cxxflags_release $app_cppflags -c -o $out $in
+  description = CXX(release) $in
+
+rule cc_debug
+  command = $cc $cflags_debug $app_cppflags -c -o $out $in
+  description = CC(debug) $in
+
+rule cc_release
+  command = $cc $cflags_release $app_cppflags -c -o $out $in
+  description = CC(release) $in
+
+rule cxx_view_debug
+  command = $cxx $cxxflags_debug $view_cppflags -x c++ -c -o $out $in
+  description = CXX(viewer) $in
+
+rule cxx_imgui_debug
+  command = $cxx $cxxflags_debug $view_cppflags -c -o $out $in
+  description = CXX(imgui) $in
+
+rule link_debug
+  command = $cxx $cxxflags_debug -o $out $in $app_ldflags $view_libs
+  description = LD $out
+
+rule link_release
+  command = $cxx $cxxflags_release -o $out $in $app_ldflags $app_libs
+  description = LD $out
+
+rule mkdir_touch
+  command = mkdir -p $dir && touch $out
+  description = MKDIR $dir
+  restat = 1
+
+# Download $url into $dest, then touch stamp $out. Stamp lives under build/ so
+# vendor trees are not ninja outputs (avoids always-dirty no-input edges).
+rule curl_stamp
+  command = mkdir -p $$(dirname $dest) $$(dirname $out) && curl -fsSL -o $dest $url && touch $out
+  description = CURL $dest
+  restat = 1
+  pool = console
+
+rule curl_zip
+  command = mkdir -p $$(dirname $out) && curl -L --fail --output $out $url
+  description = CURL $out
+  pool = console
+
+rule extract_miniz
+  command = rm -rf ${miniz_dir} && mkdir -p ${miniz_dir} && 7z x $in -o${miniz_dir} -y && rm -rf ${miniz_dir}/examples && rm -f ${miniz_dir}/ChangeLog.md ${miniz_dir}/readme.md && touch $out
+  description = EXTRACT miniz
+  restat = 1
+
+rule extract_imgui
+  command = rm -rf ${imgui_dir} && mkdir -p ${imgui_dir} && 7z x $in -o${imgui_dir} -y && mv ${imgui_dir}/imgui-${imgui_tag}/* ${imgui_dir}/ && rm -rf ${imgui_dir}/imgui-${imgui_tag} && rm -rf ${imgui_dir}/backends ${imgui_dir}/docs ${imgui_dir}/examples ${imgui_dir}/misc && rm -f ${imgui_dir}/imgui_demo.cpp && touch $out
+  description = EXTRACT imgui
+  restat = 1
+
+rule run_tests
+  command = mkdir -p ${test_bindir} && failed=0; use_n=0; start_s=-1; if [ -n "$$n" ]; then use_n=1; elif [ -n "$$s" ]; then start_s=$$(echo "$$s" | sed 's/^0*//'); [ -z "$$start_s" ] && start_s=0; fi; for src in tests/[0-9][0-9][0-9]_*.c tests/[0-9][0-9][0-9]-*.c; do [ -f "$$src" ] || continue; base=$$(basename "$$src" .c); num=$$(echo "$$base" | sed 's/^\([0-9][0-9][0-9]\).*/\1/'); if [ "$$use_n" -eq 1 ]; then match=0; rest="$$n"; rest=$$(echo "$$rest" | tr -d ' '); while [ -n "$$rest" ]; do part=$${rest%%,*}; if [ "$$part" = "$$rest" ]; then rest=""; else rest=$${rest#*,}; fi; [ -z "$$part" ] && continue; pad=$$(printf '%03d' "$$part" 2>/dev/null || printf '%s' "$$part"); if [ "$$num" = "$$pad" ]; then match=1; break; fi; done; [ "$$match" -eq 1 ] || continue; elif [ "$$start_s" -ge 0 ] 2>/dev/null; then num_i=$$(echo "$$num" | sed 's/^0*//'); [ -z "$$num_i" ] && num_i=0; [ "$$num_i" -ge "$$start_s" ] || continue; fi; echo "CC  ${test_bindir}/$$base  [${test_cc}]"; ${test_cc} ${test_cflags} ${test_includes} -o ${test_bindir}/$$base $$src ${test_impl} || exit 1; echo "RUN ${test_bindir}/$$base"; ${test_bindir}/$$base || failed=1; done; if [ "$$failed" -ne 0 ]; then echo "Some tests failed."; exit 1; fi; echo "All selected tests passed."
+  description = TEST
+  pool = console
+
+# ---------------------------------------------------------------------------
+# sources → objects (debug + release)
+# ---------------------------------------------------------------------------
+
+cxx_srcs = src/converter.cpp src/decode/decoder.cpp src/export/gltf_exporter.cpp src/gltf/gltf_writer.cpp src/deflate_io_miniz.cpp src/image_io_stb.cpp src/json_io_cjson.cpp src/main.cpp src/util/png_writer.cpp
+# app C sources (exclude src/debug.c — viewer only, compiled as C++)
+c_srcs = src/impl.c
+vendor_c_srcs = vendors/cjson/cJSON.c vendors/miniz/miniz.c
+imgui_srcs = vendors/imgui/imgui.cpp vendors/imgui/imgui_draw.cpp vendors/imgui/imgui_tables.cpp vendors/imgui/imgui_widgets.cpp
+
+# --- debug objects ---
+build build/obj/debug/converter.o: cxx_debug src/converter.cpp
+build build/obj/debug/decode/decoder.o: cxx_debug src/decode/decoder.cpp
+build build/obj/debug/deflate_io_miniz.o: cxx_debug src/deflate_io_miniz.cpp
+build build/obj/debug/image_io_stb.o: cxx_debug src/image_io_stb.cpp
+build build/obj/debug/json_io_cjson.o: cxx_debug src/json_io_cjson.cpp
+build build/obj/debug/export/gltf_exporter.o: cxx_debug src/export/gltf_exporter.cpp
+build build/obj/debug/gltf/gltf_writer.o: cxx_debug src/gltf/gltf_writer.cpp
+build build/obj/debug/main.o: cxx_debug src/main.cpp
+build build/obj/debug/util/png_writer.o: cxx_debug src/util/png_writer.cpp
+build build/obj/debug/impl.o: cc_debug src/impl.c
+build build/obj/debug/vendors/cjson/cJSON.o: cc_debug vendors/cjson/cJSON.c
+build build/obj/debug/vendors/miniz/miniz.o: cc_debug vendors/miniz/miniz.c
+
+build build/obj/debug/debug_view.o: cxx_view_debug src/debug.c
+
+build build/obj/debug/imgui/imgui.o: cxx_imgui_debug vendors/imgui/imgui.cpp
+build build/obj/debug/imgui/imgui_draw.o: cxx_imgui_debug vendors/imgui/imgui_draw.cpp
+build build/obj/debug/imgui/imgui_tables.o: cxx_imgui_debug vendors/imgui/imgui_tables.cpp
+build build/obj/debug/imgui/imgui_widgets.o: cxx_imgui_debug vendors/imgui/imgui_widgets.cpp
+
+build build/debug: link_debug $
+    build/obj/debug/converter.o $
+    build/obj/debug/decode/decoder.o $
+    build/obj/debug/deflate_io_miniz.o $
+    build/obj/debug/image_io_stb.o $
+    build/obj/debug/json_io_cjson.o $
+    build/obj/debug/export/gltf_exporter.o $
+    build/obj/debug/gltf/gltf_writer.o $
+    build/obj/debug/util/png_writer.o $
+    build/obj/debug/impl.o $
+    build/obj/debug/vendors/cjson/cJSON.o $
+    build/obj/debug/vendors/miniz/miniz.o $
+    build/obj/debug/debug_view.o $
+    build/obj/debug/imgui/imgui.o $
+    build/obj/debug/imgui/imgui_draw.o $
+    build/obj/debug/imgui/imgui_tables.o $
+    build/obj/debug/imgui/imgui_widgets.o
+
+# --- release objects ---
+build build/obj/release/converter.o: cxx_release src/converter.cpp
+build build/obj/release/decode/decoder.o: cxx_release src/decode/decoder.cpp
+build build/obj/release/deflate_io_miniz.o: cxx_release src/deflate_io_miniz.cpp
+build build/obj/release/image_io_stb.o: cxx_release src/image_io_stb.cpp
+build build/obj/release/json_io_cjson.o: cxx_release src/json_io_cjson.cpp
+build build/obj/release/export/gltf_exporter.o: cxx_release src/export/gltf_exporter.cpp
+build build/obj/release/gltf/gltf_writer.o: cxx_release src/gltf/gltf_writer.cpp
+build build/obj/release/main.o: cxx_release src/main.cpp
+build build/obj/release/util/png_writer.o: cxx_release src/util/png_writer.cpp
+build build/obj/release/impl.o: cc_release src/impl.c
+build build/obj/release/vendors/cjson/cJSON.o: cc_release vendors/cjson/cJSON.c
+build build/obj/release/vendors/miniz/miniz.o: cc_release vendors/miniz/miniz.c
+
+build build/m3g: link_release $
+    build/obj/release/converter.o $
+    build/obj/release/decode/decoder.o $
+    build/obj/release/deflate_io_miniz.o $
+    build/obj/release/image_io_stb.o $
+    build/obj/release/json_io_cjson.o $
+    build/obj/release/export/gltf_exporter.o $
+    build/obj/release/gltf/gltf_writer.o $
+    build/obj/release/main.o $
+    build/obj/release/util/png_writer.o $
+    build/obj/release/impl.o $
+    build/obj/release/vendors/cjson/cJSON.o $
+    build/obj/release/vendors/miniz/miniz.o
+
+# ---------------------------------------------------------------------------
+# phony aliases
+# ---------------------------------------------------------------------------
+
+build all debug view: phony build/debug
+build release: phony build/m3g
+
+default all
+
+# ---------------------------------------------------------------------------
+# setup (vendor downloads) — stamps under build/setup/; run: ninja setup
+# ---------------------------------------------------------------------------
+
+build build/setup/libs-testfw.h: curl_stamp
+  dest = vendors/libs/testfw.h
+  url = https://raw.githubusercontent.com/mattiasgustavsson/libs/refs/heads/main/testfw.h
+
+build setup-libs: phony build/setup/libs-testfw.h
+
+build build/setup/cgltf.h: curl_stamp
+  dest = vendors/cgltf/cgltf.h
+  url = https://raw.githubusercontent.com/jkuhlmann/cgltf/refs/heads/master/cgltf.h
+
+build setup-cgltf: phony build/setup/cgltf.h
+
+build build/setup/cJSON.c: curl_stamp
+  dest = vendors/cjson/cJSON.c
+  url = https://raw.githubusercontent.com/DaveGamble/cJSON/refs/heads/master/cJSON.c
+
+build build/setup/cJSON.h: curl_stamp
+  dest = vendors/cjson/cJSON.h
+  url = https://raw.githubusercontent.com/DaveGamble/cJSON/refs/heads/master/cJSON.h
+
+build setup-cjson: phony build/setup/cJSON.c build/setup/cJSON.h
+
+build build/setup/stb_image.h: curl_stamp
+  dest = vendors/stb/stb_image.h
+  url = https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image.h
+
+build build/setup/stb_image_write.h: curl_stamp
+  dest = vendors/stb/stb_image_write.h
+  url = https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image_write.h
+
+build setup-stb: phony build/setup/stb_image.h build/setup/stb_image_write.h
+
+# Only headers used by src/debug.c (viewer).
+build build/setup/sokol_app.h: curl_stamp
+  dest = vendors/sokol/sokol_app.h
+  url = https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_app.h
+build build/setup/sokol_gfx.h: curl_stamp
+  dest = vendors/sokol/sokol_gfx.h
+  url = https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_gfx.h
+build build/setup/sokol_glue.h: curl_stamp
+  dest = vendors/sokol/sokol_glue.h
+  url = https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_glue.h
+build build/setup/sokol_log.h: curl_stamp
+  dest = vendors/sokol/sokol_log.h
+  url = https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_log.h
+build build/setup/sokol_time.h: curl_stamp
+  dest = vendors/sokol/sokol_time.h
+  url = https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/sokol_time.h
+build build/setup/sokol_gl.h: curl_stamp
+  dest = vendors/sokol/util/sokol_gl.h
+  url = https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_gl.h
+build build/setup/sokol_imgui.h: curl_stamp
+  dest = vendors/sokol/util/sokol_imgui.h
+  url = https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_imgui.h
+build build/setup/sokol_gfx_imgui.h: curl_stamp
+  dest = vendors/sokol/util/sokol_gfx_imgui.h
+  url = https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_gfx_imgui.h
+build build/setup/sokol_app_imgui.h: curl_stamp
+  dest = vendors/sokol/util/sokol_app_imgui.h
+  url = https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_app_imgui.h
+
+build setup-sokol: phony $
+    build/setup/sokol_app.h build/setup/sokol_gfx.h build/setup/sokol_glue.h $
+    build/setup/sokol_log.h build/setup/sokol_time.h build/setup/sokol_gl.h $
+    build/setup/sokol_imgui.h build/setup/sokol_gfx_imgui.h build/setup/sokol_app_imgui.h
+
+build ${miniz_archive}: curl_zip
+  url = ${miniz_url}
+
+build ${miniz_stamp}: extract_miniz ${miniz_archive}
+build setup-miniz: phony ${miniz_stamp}
+
+build ${imgui_archive}: curl_zip
+  url = ${imgui_url}
+
+build ${imgui_stamp}: extract_imgui ${imgui_archive}
+build setup-imgui: phony ${imgui_stamp}
+
+build setup: phony setup-cgltf setup-cjson setup-stb setup-sokol setup-libs setup-miniz setup-imgui
+
+# ---------------------------------------------------------------------------
+# tests
+# ---------------------------------------------------------------------------
+
+build test: run_tests
+  pool = console
+
+# ---------------------------------------------------------------------------
+# clean note: use `ninja -t clean` for outputs known to ninja.
+# Makefile also removes build/ and tests/bin entirely; for a full wipe:
+#   rm -rf build tests/bin
+# ---------------------------------------------------------------------------

@@ -1,16 +1,7 @@
-#pragma once
+#ifndef M3G_PATTERN_TEXTURE_ATTACHER_HPP_INCLUDED
+#define M3G_PATTERN_TEXTURE_ATTACHER_HPP_INCLUDED
 
-#include "slop/scene_model.hpp"
+/* PatternTextureAttacher lives in include/m3g.hpp under #define M3G_DECODE_IMPL. */
+#include "m3g.hpp"
 
-#include <optional>
-#include <string>
-
-namespace slop {
-namespace scene {
-
-struct PatternTextureAttacher {
-    static SceneIr auto_attach(const SceneIr &scene, const std::optional<std::string> &pattern_path);
-};
-
-} // namespace scene
-} // namespace slop
+#endif /* M3G_PATTERN_TEXTURE_ATTACHER_HPP_INCLUDED */

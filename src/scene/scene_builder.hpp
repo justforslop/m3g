@@ -1,23 +1,7 @@
-#pragma once
+#ifndef M3G_SCENE_BUILDER_HPP_INCLUDED
+#define M3G_SCENE_BUILDER_HPP_INCLUDED
 
-#include "slop/m3g_model.hpp"
-#include "slop/scene_model.hpp"
+/* Scene builder lives in include/m3g.hpp under #define M3G_DECODE_IMPL. */
+#include "m3g.hpp"
 
-#include <string>
-
-namespace slop {
-namespace scene {
-
-class M3gSceneBuilder {
-public:
-    M3gSceneBuilder(const m3g::File &file, std::string input_path);
-
-    SceneIr build();
-
-private:
-    const m3g::File &file_;
-    std::string input_path_;
-};
-
-} // namespace scene
-} // namespace slop
+#endif /* M3G_SCENE_BUILDER_HPP_INCLUDED */
