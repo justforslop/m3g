@@ -42,7 +42,7 @@ imgui_archive = ${buildroot}/imgui-${imgui_tag}.zip
 imgui_dir = vendors/imgui
 imgui_stamp = ${imgui_dir}/.extracted
 
-app_cppflags = -I. -I${incdir} -I${srcdir} -Ivendors -Ivendors/libs -Ivendors/miniz
+app_cppflags = -I. -I${incdir} -I${srcdir} -Ivendors -Ivendors/cgltf -Ivendors/libs -Ivendors/miniz
 view_cppflags = $app_cppflags -Ivendors/imgui
 app_ldflags =
 app_libs = -lm
@@ -133,7 +133,7 @@ rule run_tests
 # sources → objects (debug + release)
 # ---------------------------------------------------------------------------
 
-cxx_srcs = src/converter.cpp src/decode/decoder.cpp src/export/gltf_exporter.cpp src/gltf/gltf_writer.cpp src/deflate_io_miniz.cpp src/image_io_stb.cpp src/json_io_cjson.cpp src/main.cpp src/util/png_writer.cpp
+cxx_srcs = src/converter.cpp src/decode/decoder.cpp src/export/gltf_exporter.cpp src/gltf/gltf_writer.cpp src/deflate_io_miniz.cpp src/image_io_stb.cpp src/json_io_cjson.cpp src/gltf_io_cgltf.cpp src/main.cpp src/util/png_writer.cpp
 # app C sources (exclude src/debug.c — viewer only, compiled as C++)
 c_srcs = src/impl.c
 vendor_c_srcs = vendors/cjson/cJSON.c vendors/miniz/miniz.c
@@ -145,6 +145,7 @@ build build/obj/debug/decode/decoder.o: cxx_debug src/decode/decoder.cpp
 build build/obj/debug/deflate_io_miniz.o: cxx_debug src/deflate_io_miniz.cpp
 build build/obj/debug/image_io_stb.o: cxx_debug src/image_io_stb.cpp
 build build/obj/debug/json_io_cjson.o: cxx_debug src/json_io_cjson.cpp
+build build/obj/debug/gltf_io_cgltf.o: cxx_debug src/gltf_io_cgltf.cpp
 build build/obj/debug/export/gltf_exporter.o: cxx_debug src/export/gltf_exporter.cpp
 build build/obj/debug/gltf/gltf_writer.o: cxx_debug src/gltf/gltf_writer.cpp
 build build/obj/debug/main.o: cxx_debug src/main.cpp
@@ -166,6 +167,7 @@ build build/debug: link_debug $
     build/obj/debug/deflate_io_miniz.o $
     build/obj/debug/image_io_stb.o $
     build/obj/debug/json_io_cjson.o $
+    build/obj/debug/gltf_io_cgltf.o $
     build/obj/debug/export/gltf_exporter.o $
     build/obj/debug/gltf/gltf_writer.o $
     build/obj/debug/util/png_writer.o $
@@ -184,6 +186,7 @@ build build/obj/release/decode/decoder.o: cxx_release src/decode/decoder.cpp
 build build/obj/release/deflate_io_miniz.o: cxx_release src/deflate_io_miniz.cpp
 build build/obj/release/image_io_stb.o: cxx_release src/image_io_stb.cpp
 build build/obj/release/json_io_cjson.o: cxx_release src/json_io_cjson.cpp
+build build/obj/release/gltf_io_cgltf.o: cxx_release src/gltf_io_cgltf.cpp
 build build/obj/release/export/gltf_exporter.o: cxx_release src/export/gltf_exporter.cpp
 build build/obj/release/gltf/gltf_writer.o: cxx_release src/gltf/gltf_writer.cpp
 build build/obj/release/main.o: cxx_release src/main.cpp
@@ -198,6 +201,7 @@ build build/m3g: link_release $
     build/obj/release/deflate_io_miniz.o $
     build/obj/release/image_io_stb.o $
     build/obj/release/json_io_cjson.o $
+    build/obj/release/gltf_io_cgltf.o $
     build/obj/release/export/gltf_exporter.o $
     build/obj/release/gltf/gltf_writer.o $
     build/obj/release/main.o $
@@ -229,7 +233,11 @@ build build/setup/cgltf.h: curl_stamp
   dest = vendors/cgltf/cgltf.h
   url = https://raw.githubusercontent.com/jkuhlmann/cgltf/refs/heads/master/cgltf.h
 
-build setup-cgltf: phony build/setup/cgltf.h
+build build/setup/cgltf_write.h: curl_stamp
+  dest = vendors/cgltf/cgltf_write.h
+  url = https://raw.githubusercontent.com/jkuhlmann/cgltf/refs/heads/master/cgltf_write.h
+
+build setup-cgltf: phony build/setup/cgltf.h build/setup/cgltf_write.h
 
 build build/setup/cJSON.c: curl_stamp
   dest = vendors/cjson/cJSON.c
@@ -298,6 +306,19 @@ build ${imgui_stamp}: extract_imgui ${imgui_archive}
 build setup-imgui: phony ${imgui_stamp}
 
 build setup: phony setup-cgltf setup-cjson setup-stb setup-sokol setup-libs setup-miniz setup-imgui
+
+
+# ---------------------------------------------------------------------------
+# docs (doxygen)
+# ---------------------------------------------------------------------------
+
+rule doxygen
+  command = command -v doxygen >/dev/null 2>&1 || { echo "doxygen not found" >&2; exit 1; }; mkdir -p docs/api && doxygen $in && echo "Open docs/api/html/index.html"
+  description = DOXYGEN $in
+  pool = console
+
+build docs/api/html/index.html: doxygen Doxyfile | include/m3g.hpp include/m3g.h
+build doc: phony docs/api/html/index.html
 
 # ---------------------------------------------------------------------------
 # tests

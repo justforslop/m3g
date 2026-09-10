@@ -22,3 +22,5 @@ references/
 /*.glb
 /*.bin
 /*.gltf
+# Doxygen output
+docs/api/

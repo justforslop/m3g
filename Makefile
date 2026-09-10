@@ -6,9 +6,11 @@
 #   make view       # same as make debug
 #   make release    # CLI    -> build/m3g
 #   make clean
+#   make doc         # Doxygen HTML -> docs/api/html (needs doxygen)
 #
 # Ninja (same targets/outputs; see build.ninja and BUILD.md):
 #   ninja / ninja debug / ninja view / ninja release / ninja test / ninja setup
+#   ninja doc
 #
 # Viewer:
 #   ./build/debug assets/90.m3g
@@ -20,7 +22,7 @@
 #
 # Vendored headers:
 #   make setup   # or: ninja setup
-.PHONY: all debug release view clean setup setup-libs setup-cgltf setup-cjson setup-stb setup-sokol setup-miniz setup-imgui test
+.PHONY: all debug release view clean setup setup-libs setup-cgltf setup-cjson setup-stb setup-sokol setup-miniz setup-imgui test doc
 
 MINIZ_TAG := 3.1.2
 MINIZ_URL := https://github.com/richgel999/miniz/releases/download/$(MINIZ_TAG)/miniz-$(MINIZ_TAG).zip
@@ -53,7 +55,7 @@ APP_CFLAGS_debug     := -std=c99 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE
 APP_CFLAGS_release   := -std=c99 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE
 APP_CXXFLAGS         := $(APP_CXXFLAGS_$(BUILD))
 APP_CFLAGS           := $(APP_CFLAGS_$(BUILD))
-APP_CPPFLAGS         := -I. -I$(INCDIR) -I$(SRCDIR) -Ivendors -Ivendors/libs -Ivendors/miniz
+APP_CPPFLAGS         := -I. -I$(INCDIR) -I$(SRCDIR) -Ivendors -Ivendors/cgltf -Ivendors/libs -Ivendors/miniz
 VIEW_CPPFLAGS        := $(APP_CPPFLAGS) -Ivendors/imgui
 APP_LDFLAGS          :=
 APP_LIBS             := -lm
@@ -122,6 +124,20 @@ $(BUILDROOT) $(OBJDIR) $(TEST_BINDIR):
 clean:
 	rm -rf $(BUILDROOT) $(TEST_BINDIR)
 
+# HTML API docs from include/m3g.hpp (+ m3g.h). Requires doxygen on PATH.
+DOXYFILE := Doxyfile
+DOXY_OUT := docs/api/html/index.html
+
+doc: $(DOXY_OUT)
+
+$(DOXY_OUT): $(DOXYFILE) include/m3g.hpp include/m3g.h
+	@command -v doxygen >/dev/null 2>&1 || { \
+		echo "doxygen not found; install it to build API docs"; exit 1; }
+	@mkdir -p docs/api
+	@echo "DOXYGEN $(DOXYFILE) -> docs/api/html"
+	doxygen $(DOXYFILE)
+	@echo "Open docs/api/html/index.html"
+
 CURL := curl -fsSL -o
 
 setup: setup-cgltf setup-cjson setup-stb setup-sokol setup-libs setup-miniz setup-imgui
@@ -135,6 +151,8 @@ setup-cgltf:
 	@mkdir -p vendors/cgltf
 	$(CURL) vendors/cgltf/cgltf.h \
 		https://raw.githubusercontent.com/jkuhlmann/cgltf/refs/heads/master/cgltf.h
+	$(CURL) vendors/cgltf/cgltf_write.h \
+		https://raw.githubusercontent.com/jkuhlmann/cgltf/refs/heads/master/cgltf_write.h
 
 setup-cjson:
 	@mkdir -p vendors/cjson

@@ -156,7 +156,12 @@ The tree’s impl unit is `src/decode/decoder.cpp` (defines `M3G_IMPL`).
 | -------- | --- | ------------------------ |
 | zlib/deflate (sections, embedded images) | `m3g::DeflateIo` / `set_deflate_io` | `src/deflate_io_miniz.cpp` → `install_miniz_deflate_io()` |
 | raster decode | `m3g::ImageIo` / `set_image_io` | `src/image_io_stb.cpp` → `install_stb_image_io()` |
-| JSON build (glTF export) | `m3g::JsonIo` / `set_json_io` | `src/json_io_cjson.cpp` → `install_cjson_json_io()` |
+| JSON (optional legacy) | `m3g::JsonIo` / `set_json_io` | `src/json_io_cjson.cpp` → `install_cjson_json_io()` |
+| glTF write/parse | `m3g::GltfIo` / `set_gltf_io` | `src/gltf_io_cgltf.cpp` → `install_cgltf_gltf_io()` |
+
+**glTF export** builds a `cgltf_data` tree, then calls **`m3g::gltf_write_file`**
+(callback; default adapter uses `cgltf_write_file`). External `.bin` / images
+are written by the app; optional validate uses `gltf_parse_file` / `gltf_validate`.
 
 Both adapters auto-register via static init when linked. PNG **write** still
 uses `stb_image_write` in `src/util/png_writer.cpp` / glTF export for now.
@@ -299,9 +304,22 @@ except clean (see below).
 | `view`              | Alias for `debug`                               |
 | `release`           | CLI converter `build/m3g`                      |
 | `test`              | Run tests (`n=` / `s=` filters; see **Tests**)  |
+| `doc`               | Doxygen HTML API docs → `docs/api/html/`        |
 | `setup`             | Fetch all vendors (run once before first build) |
 | `make clean`        | Remove `build/` and `tests/bin/`                |
 | `ninja -t clean`    | Remove outputs known to Ninja                   |
+
+### API documentation
+
+Requires **doxygen** on `PATH`. Config: `Doxyfile` (inputs: `include/m3g.hpp`,
+`include/m3g.h`).
+
+```bash
+make doc    # or: ninja doc
+# open docs/api/html/index.html
+```
+
+Generated HTML is gitignored under `docs/api/`.
 
 ### Vendor setup
 
@@ -309,7 +327,7 @@ except clean (see below).
 | ------------- | ------------------------------------------------------------------------------------------------ |
 | `setup`       | All vendors below                                                                                |
 | `setup-libs`  | `testfw.h` (unit tests)                                                                          |
-| `setup-cgltf` | `cgltf.h` (glTF validate)                                                                        |
+| `setup-cgltf` | `cgltf.h`, `cgltf_write.h` (parse/validate + write)                                               |
 | `setup-cjson` | `cJSON.c`, `cJSON.h`                                                                             |
 | `setup-stb`   | `stb_image.h`, `stb_image_write.h`                                                               |
 | `setup-sokol` | Viewer only: `sokol_app/gfx/glue/log/time`, `sokol_gl`, sokol-imgui trio                          |

@@ -1,15 +1,15 @@
+/*
+    m3g.h -- C-compatible version / metadata stub for m3g
+
+    Prefer the C++ API:
+        #include <m3g.hpp>
+
+    This header exposes M3G_VERSION_* and m3g_error for C. Under C++ it also
+    includes m3g.hpp (full public API).
+*/
+
 #ifndef m3g_h
 #define m3g_h
-
-/*
- * m3g — JSR-184 / M3G tools.
- *
- * C++ API (preferred):
- *   #include <m3g.hpp>
- *
- * This header is a C-compatible version/metadata stub; under C++ it also
- * pulls the full public API from the single amalgamated header.
- */
 
 #include <stddef.h>
 #include <stdint.h>

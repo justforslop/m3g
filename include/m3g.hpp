@@ -1,81 +1,55 @@
 /*
     m3g.hpp -- JSR-184 / M3G decode + glTF convert (C++17)
 
-    Project: m3g
-
     Do this:
         #define M3G_IMPL
-    before you include this file in *one* C++ translation unit to create the
-    implementation (stb style).
+    before you include this file in *one* C++ file to create the
+    implementation.
 
-    Optionally, for a single subsystem only:
+    Optionally, for decode only:
         #define M3G_DECODE_IMPL
 
     In every other translation unit:
         #include <m3g.hpp>
 
-    Repository `include/` (or this file's directory) must be on the compiler
-    include path (-Iinclude).
+    Put include/ on the compiler include path (-Iinclude).
 
-    Optional defines (before include):
-        M3G_ASSERT(c)          - your assert macro (default: none / C++ throw paths)
-        M3G_DECODE_API_DECL    - decl prefix for decode API (default: empty)
-        M3G_API_DECL           - alias for M3G_DECODE_API_DECL
-        M3G_API_IMPL           - impl prefix (default: empty)
+    Optionally provide the following defines with your own implementations:
+        M3G_ASSERT(c)             - your own assert macro
+        M3G_API_DECL              - public declaration prefix (default: empty)
+        M3G_DECODE_API_DECL       - same as M3G_API_DECL if unset
+        M3G_API_IMPL              - public implementation prefix (default: empty)
 
-    Dependencies for M3G_DECODE_IMPL: none beyond the standard library.
+    Backends are not compiled into this header. Install callbacks before
+    decode/export (or link the tree adapters that auto-register):
 
-    Optional backends are installed via callbacks (no direct miniz/stb in this header):
+        m3g::DeflateIo   // zlib/deflate     — install_miniz_deflate_io()
+        m3g::ImageIo     // raster load      — install_stb_image_io()
+        m3g::JsonIo      // optional JSON    — install_cjson_json_io()
+        m3g::GltfIo      // glTF write/parse — install_cgltf_gltf_io()
 
-        // zlib/deflate (section inflate, embedded image inflate)
-        m3g::DeflateIo dio = {};
-        dio.adler32 = ...;            // like mz_adler32
-        dio.uncompress = ...;         // like mz_uncompress (0 = OK)
-        dio.uncompress_to_heap = ...; // like tinfl_decompress_mem_to_heap
-        dio.free_mem = ...;           // like mz_free
         m3g::set_deflate_io(&dio);
-
-        // raster decode
-        m3g::ImageIo iio = {};
-        iio.load_file = ...;          // like stbi_load
-        iio.load_memory = ...;        // like stbi_load_from_memory
-        iio.free_pixels = ...;        // like stbi_image_free
         m3g::set_image_io(&iio);
-
-        // JSON build (glTF export)
-        m3g::JsonIo jio = {};
-        jio.create_object = ...;      // like cJSON_CreateObject
-        jio.create_array = ...;
-        jio.create_string = ...;
-        jio.create_number = ...;
-        jio.create_bool = ...;
-        jio.add_item_to_object = ...;
-        jio.add_item_to_array = ...;
-        jio.get_array_size = ...;
-        jio.delete_node = ...;
-        jio.print_unformatted = ...;
-        jio.print_formatted = ...;
-        jio.free_print = ...;
         m3g::set_json_io(&jio);
-
-    Optional adapters in this tree (static-init when linked):
-        src/deflate_io_miniz.cpp  -> install_miniz_deflate_io()
-        src/image_io_stb.cpp      -> install_stb_image_io()
-        src/json_io_cjson.cpp     -> install_cjson_json_io()
+        m3g::set_gltf_io(&gio);
 
     Public decode API:
         m3g::decode::Decoder
         m3g::decode::DecodeOptions
-        m3g::decode::Decoded      // .file (M3G object graph) + .scene_ir (export IR)
+        m3g::decode::Decoded   // .file (object graph) + .scene_ir (export IR)
 
         Decoder::decode_file(path, options)
         Decoder::decode_bytes(bytes, source_path, options)
+
+    Convert / export:
+        m3g::Converter
+        m3g::exp::GltfExporter
 
     Ownership:
         Decoded is value-semantic (RAII). No free() required.
         Throws std::runtime_error (and related) on parse / I/O failure.
 
-    Example (one .cpp provides the impl):
+    Example:
 
         // m3g_impl.cpp
         #define M3G_IMPL
@@ -86,13 +60,10 @@
         int main() {
             m3g::decode::Decoder dec;
             auto d = dec.decode_file("model.m3g");
-            // use d.scene_ir / d.file
+            // d.file, d.scene_ir
         }
 
-    C metadata stub: #include <m3g.h> (version macros; pulls this header in C++).
-
-    Convert / export types (Converter, GltfExporter) are declared here; their
-    implementations still live in src/ until M3G_CONVERT_IMPL is added.
+    C metadata stub: #include <m3g.h>
 */
 
 #ifndef M3G_HPP_INCLUDED
@@ -128,49 +99,110 @@
 #define M3G_API_IMPL
 #endif
 
+/** @brief Library major version. */
 #define M3G_VERSION_MAJOR 0
+/** @brief Library minor version. */
 #define M3G_VERSION_MINOR 1
+/** @brief Library patch version. */
 #define M3G_VERSION_PATCH 0
 
+/** @brief Byte length of the M3G file identifier (`\xABJSRI184\xBB\r\n\x1A\n`). */
 #ifndef M3G_IDENTIFIER_LEN
 #define M3G_IDENTIFIER_LEN 12
 #endif
 
+/**
+ * @namespace m3g
+ * @brief Root namespace for the M3G toolkit.
+ *
+ * @defgroup m3g_io Backend I/O callbacks
+ * @brief Pluggable deflate, image, and JSON backends.
+ *
+ * @defgroup m3g_model M3G object model
+ * @brief Parsed JSR-184 object graph (`m3g::model`).
+ *
+ * @defgroup m3g_scene Scene IR
+ * @brief Export-oriented intermediate representation (`m3g::scene`).
+ *
+ * @defgroup m3g_decode Decode API
+ * @brief Bytes/path → @ref m3g::decode::Decoded.
+ *
+ * @defgroup m3g_export Export / convert API
+ * @brief Scene IR → glTF via exporter or facade converter.
+ */
+
 namespace m3g {
 
-/*
-    Deflate / zlib callbacks (miniz-shaped).
-
-    adler32:
-      - Running Adler-32. Pass ptr=NULL to get the initial seed (normally 1).
-    uncompress:
-      - Inflate zlib-wrapped deflate into *dest_len bytes at dest.
-      - On entry *dest_len is capacity; on success *dest_len is output size.
-      - Return 0 on success (DEFLATE_OK), non-zero on failure.
-    uncompress_to_heap:
-      - Inflate when output size is unknown. zlib_header != 0 => zlib wrap,
-        0 => raw deflate. Returns malloc'd buffer (free with free_mem) or NULL.
-    free_mem:
-      - Release pointer from uncompress_to_heap (NULL-safe).
-
-    Default: unset. Link deflate_io_miniz.cpp or call set_deflate_io() before
-    decode that needs compression.
-*/
+/**
+ * @ingroup m3g_io
+ * @brief Success code for @ref DeflateIo::uncompress (matches zlib/miniz `Z_OK` / `MZ_OK`).
+ */
 enum { DEFLATE_OK = 0 };
+
+/**
+ * @ingroup m3g_io
+ * @brief Initial Adler-32 seed (pass as @p adler when starting a new checksum).
+ */
 enum { ADLER32_INIT = 1 };
 
+/**
+ * @ingroup m3g_io
+ * @brief Zlib / deflate function table (miniz-shaped).
+ *
+ * Install with @ref set_deflate_io or @ref install_miniz_deflate_io.
+ * Required for compressed M3G sections and some embedded images.
+ */
 struct DeflateIo {
+    /**
+     * @brief Running Adler-32.
+     * @param adler Previous sum, or @ref ADLER32_INIT to start.
+     * @param ptr Data pointer; if `NULL`, returns the initial seed for @p adler.
+     * @param buf_len Byte count when @p ptr is non-null.
+     * @param user @ref user from this struct.
+     */
     std::uint32_t (*adler32)(std::uint32_t adler, unsigned char const *ptr, std::size_t buf_len, void *user) = nullptr;
+
+    /**
+     * @brief Inflate zlib-wrapped deflate into a caller-owned buffer.
+     * @param[in,out] dest_len On entry: capacity of @p dest; on success: bytes written.
+     * @return @ref DEFLATE_OK on success; non-zero on failure.
+     */
     int (*uncompress)(unsigned char *dest, std::size_t *dest_len, unsigned char const *source, std::size_t source_len,
                       void *user) = nullptr;
+
+    /**
+     * @brief Inflate when the output size is unknown.
+     * @param zlib_header Non-zero = zlib wrapper; `0` = raw deflate.
+     * @param[out] out_len Size of returned buffer.
+     * @return Heap block (free with @ref free_mem), or `NULL` on failure.
+     */
     void *(*uncompress_to_heap)(unsigned char const *source, std::size_t source_len, std::size_t *out_len,
                                 int zlib_header, void *user) = nullptr;
+
+    /** @brief Free a pointer from @ref uncompress_to_heap (`NULL`-safe). */
     void (*free_mem)(void *p, void *user) = nullptr;
+
+    /** @brief Opaque pointer passed to every callback. */
     void *user = nullptr;
 };
 
+/**
+ * @ingroup m3g_io
+ * @brief Install process-global deflate backend (copied by value).
+ * @param io New table, or `nullptr` to clear.
+ */
 void set_deflate_io(DeflateIo const *io);
+
+/**
+ * @ingroup m3g_io
+ * @brief Current deflate backend, or `nullptr` if unset.
+ */
 DeflateIo const *deflate_io(void);
+
+/**
+ * @ingroup m3g_io
+ * @brief Register the vendored miniz backend (`src/deflate_io_miniz.cpp`).
+ */
 void install_miniz_deflate_io(void);
 
 inline std::uint32_t deflate_adler32(std::uint32_t adler, unsigned char const *ptr, std::size_t buf_len) {
@@ -210,38 +242,50 @@ inline void deflate_free(void *p) {
     io->free_mem(p, io->user);
 }
 
-/*
-    Image I/O callbacks (stb_image-shaped).
-
-    load_file / load_memory:
-      - path or memory buffer in
-      - *width, *height, *channels_in_file out (channels before req_comp conversion)
-      - req_comp: 0 = original, 4 = force RGBA8
-      - return pixel pointer on success, NULL on failure
-    free_pixels:
-      - release pointer returned by load_* (may be NULL-safe)
-
-    Default: unset (loads fail with a clear error). Link image_io_stb.cpp or
-    call set_image_io() / install_stb_image_io() before decode/export that
-    needs raster decode.
-*/
+/**
+ * @ingroup m3g_io
+ * @brief Raster image load function table (stb_image-shaped).
+ *
+ * @p req_comp: `0` = source layout; `4` = force RGBA8.
+ * On success returns a pixel pointer owned until @ref free_pixels.
+ */
 struct ImageIo {
+    /** @brief Load from filesystem path (like `stbi_load`). */
     unsigned char *(*load_file)(char const *filename, int *width, int *height, int *channels_in_file, int req_comp,
                                 void *user) = nullptr;
+    /** @brief Load from memory (like `stbi_load_from_memory`). */
     unsigned char *(*load_memory)(unsigned char const *buffer, int len, int *width, int *height, int *channels_in_file,
                                   int req_comp, void *user) = nullptr;
+    /** @brief Free pixels from load_* (`NULL`-safe). */
     void (*free_pixels)(void *pixels, void *user) = nullptr;
+    /** @brief Opaque pointer passed to every callback. */
     void *user = nullptr;
 };
 
-/* Copy io into process-global state. Pass nullptr to clear. */
+/**
+ * @ingroup m3g_io
+ * @brief Install process-global image backend.
+ * @param io New table, or `nullptr` to clear.
+ */
 void set_image_io(ImageIo const *io);
+
+/**
+ * @brief Current image backend, or `nullptr` if unset.
+ * @ingroup m3g_io
+ */
 ImageIo const *image_io(void);
 
-/* Optional: wire stb_image (defined in src/image_io_stb.cpp when linked). */
+/**
+ * @ingroup m3g_io
+ * @brief Register the vendored stb_image backend (`src/image_io_stb.cpp`).
+ */
 void install_stb_image_io(void);
 
-/* Helpers used by decode/export (throw on missing callbacks / load failure). */
+/** @name Image helpers
+ *  @ingroup m3g_io
+ *  @brief Throw if callbacks missing; otherwise forward to @ref ImageIo.
+ *  @{
+ */
 inline unsigned char *image_load_file(char const *filename, int *width, int *height, int *channels_in_file,
                                      int req_comp) {
     ImageIo const *io = image_io();
@@ -270,35 +314,169 @@ inline void image_free_pixels(void *pixels) {
     }
     io->free_pixels(pixels, io->user);
 }
+/** @} */
 
-/*
-    JSON tree callbacks (cJSON-shaped). Nodes are opaque void*.
-
-    create_* return a new node or NULL on OOM.
-    add_item_to_object / add_item_to_array take ownership of item on success.
-    get_array_size returns element count.
-    delete_node frees a root (and children).
-    print_unformatted / print_formatted return malloc'd C string; free with free_print.
-*/
+/**
+ * @ingroup m3g_io
+ * @brief JSON DOM function table (cJSON-shaped); nodes are opaque `void*`.
+ *
+ * @note glTF export primarily uses cgltf_write; this table is optional/legacy.
+ */
 struct JsonIo {
-    void *(*create_object)(void *user) = nullptr;
-    void *(*create_array)(void *user) = nullptr;
+    void *(*create_object)(void *user) = nullptr;              /**< @brief New `{}` or `NULL` on OOM. */
+    void *(*create_array)(void *user) = nullptr;               /**< @brief New `[]` or `NULL` on OOM. */
     void *(*create_string)(char const *s, void *user) = nullptr;
     void *(*create_number)(double v, void *user) = nullptr;
     void *(*create_bool)(int v, void *user) = nullptr;
+    /** @brief Attach @p item under @p key; takes ownership of @p item on success. */
     void (*add_item_to_object)(void *object, char const *key, void *item, void *user) = nullptr;
+    /** @brief Append @p item; takes ownership on success. */
     void (*add_item_to_array)(void *array, void *item, void *user) = nullptr;
     int (*get_array_size)(void const *array, void *user) = nullptr;
-    void (*delete_node)(void *node, void *user) = nullptr;
-    char *(*print_unformatted)(void *node, void *user) = nullptr;
-    char *(*print_formatted)(void *node, void *user) = nullptr;
+    void (*delete_node)(void *node, void *user) = nullptr;    /**< @brief Free subtree. */
+    char *(*print_unformatted)(void *node, void *user) = nullptr; /**< @brief Compact JSON; free with @ref free_print. */
+    char *(*print_formatted)(void *node, void *user) = nullptr;   /**< @brief Pretty JSON; free with @ref free_print. */
     void (*free_print)(char *printed, void *user) = nullptr;
     void *user = nullptr;
 };
 
+/**
+ * @brief Install process-global JSON backend (`nullptr` clears).
+ * @ingroup m3g_io
+ */
 void set_json_io(JsonIo const *io);
+/**
+ * @brief Current JSON backend, or `nullptr` if unset.
+ * @ingroup m3g_io
+ */
 JsonIo const *json_io(void);
+/**
+ * @brief Register vendored cJSON backend (`src/json_io_cjson.cpp`).
+ * @ingroup m3g_io
+ */
 void install_cjson_json_io(void);
+
+/**
+ * @brief glTF container kind for @ref GltfIo::write_file.
+ * @ingroup m3g_io
+ */
+enum GltfFileKind {
+    GLTF_FILE_JSON = 0, /**< @brief `.gltf` JSON (external bin/images separate). */
+    GLTF_FILE_GLB = 1   /**< @brief `.glb` binary container. */
+};
+
+/**
+ * @brief Success code for @ref GltfIo operations.
+ * @ingroup m3g_io
+ */
+enum { GLTF_IO_OK = 0 };
+
+/**
+ * @brief glTF write / parse / validate function table (cgltf-shaped).
+ *
+ * @p data is an opaque backend document pointer (default adapter: `cgltf_data*`).
+ * All functions return @ref GLTF_IO_OK (0) on success, non-zero on failure.
+ *
+ * @ingroup m3g_io
+ */
+struct GltfIo {
+    /**
+     * @brief Write a document to @p path.
+     * @param kind @ref GLTF_FILE_JSON or @ref GLTF_FILE_GLB.
+     * @param data Backend document (`cgltf_data*` for the default adapter).
+     */
+    int (*write_file)(char const *path, void const *data, int kind, void *user) = nullptr;
+
+    /**
+     * @brief Parse a glTF/GLB file into a backend document.
+     * @param[out] out_data Receives opaque document; free with @ref free_data.
+     */
+    int (*parse_file)(char const *path, void **out_data, void *user) = nullptr;
+
+    /** @brief Validate a document from @ref parse_file. */
+    int (*validate)(void *data, void *user) = nullptr;
+
+    /** @brief Free a document from @ref parse_file (`NULL`-safe). */
+    void (*free_data)(void *data, void *user) = nullptr;
+
+    void *user = nullptr;
+};
+
+/**
+ * @brief Install process-global glTF backend (`nullptr` clears).
+ * @ingroup m3g_io
+ */
+void set_gltf_io(GltfIo const *io);
+/**
+ * @brief Current glTF backend, or `nullptr` if unset.
+ * @ingroup m3g_io
+ */
+GltfIo const *gltf_io(void);
+/**
+ * @brief Register vendored cgltf write/parse backend (`src/gltf_io_cgltf.cpp`).
+ * @ingroup m3g_io
+ */
+void install_cgltf_gltf_io(void);
+
+/** @name Gltf helpers
+ *  @ingroup m3g_io
+ *  @{
+ */
+inline GltfIo const *require_gltf_io(char const *what) {
+    GltfIo const *io = gltf_io();
+    if (!io) {
+        throw std::runtime_error(std::string("m3g glTF I/O: not set (need ") + what +
+                                 "; call m3g::set_gltf_io or install_cgltf_gltf_io)");
+    }
+    return io;
+}
+
+inline void gltf_write_file(char const *path, void const *data, int kind) {
+    GltfIo const *io = require_gltf_io("write_file");
+    if (!io->write_file) {
+        throw std::runtime_error("m3g glTF I/O: write_file callback not set");
+    }
+    const int rc = io->write_file(path, data, kind, io->user);
+    if (rc != GLTF_IO_OK) {
+        throw std::runtime_error(std::string("m3g glTF I/O: write_file failed (rc ") + std::to_string(rc) +
+                                 ") for " + path);
+    }
+}
+
+inline void gltf_parse_file(char const *path, void **out_data) {
+    GltfIo const *io = require_gltf_io("parse_file");
+    if (!io->parse_file) {
+        throw std::runtime_error("m3g glTF I/O: parse_file callback not set");
+    }
+    const int rc = io->parse_file(path, out_data, io->user);
+    if (rc != GLTF_IO_OK) {
+        throw std::runtime_error(std::string("m3g glTF I/O: parse_file failed (rc ") + std::to_string(rc) +
+                                 ") for " + path);
+    }
+}
+
+inline void gltf_validate(void *data) {
+    GltfIo const *io = require_gltf_io("validate");
+    if (!io->validate) {
+        throw std::runtime_error("m3g glTF I/O: validate callback not set");
+    }
+    const int rc = io->validate(data, io->user);
+    if (rc != GLTF_IO_OK) {
+        throw std::runtime_error(std::string("m3g glTF I/O: validate failed (rc ") + std::to_string(rc) + ")");
+    }
+}
+
+inline void gltf_free_data(void *data) {
+    if (!data) {
+        return;
+    }
+    GltfIo const *io = require_gltf_io("free_data");
+    if (!io->free_data) {
+        throw std::runtime_error("m3g glTF I/O: free_data callback not set");
+    }
+    io->free_data(data, io->user);
+}
+/** @} */
 
 inline JsonIo const *require_json_io(char const *what) {
     JsonIo const *io = json_io();
@@ -400,8 +578,17 @@ inline void json_free_print(char *printed) {
     io->free_print(printed, io->user);
 }
 
+/**
+ * @ingroup m3g_model
+ * @namespace m3g::model
+ * @brief Parsed M3G (JSR-184) object graph and related constants.
+ */
 namespace model {
 
+/**
+ * @ingroup m3g_model
+ * @brief M3G object type byte values (JSR-184).
+ */
 struct ObjectTypes {
     static constexpr int HEADER = 0;
     static constexpr int ANIMATION_CONTROLLER = 1;
@@ -429,6 +616,10 @@ struct ObjectTypes {
     static constexpr int EXTERNAL_REFERENCE = 0xFF;
 };
 
+/**
+ * @ingroup m3g_model
+ * @brief Animation track target property IDs.
+ */
 struct AnimationProperty {
     static constexpr int ALPHA = 256;
     static constexpr int AMBIENT_COLOR = 257;
@@ -453,6 +644,10 @@ struct AnimationProperty {
     static constexpr int VISIBILITY = 276;
 };
 
+/**
+ * @ingroup m3g_model
+ * @brief KeyframeSequence interpolation constants.
+ */
 struct KeyframeInterpolation {
     static constexpr int LINEAR = 176;
     static constexpr int SLERP = 177;
@@ -461,6 +656,10 @@ struct KeyframeInterpolation {
     static constexpr int STEP = 180;
 };
 
+/**
+ * @ingroup m3g_model
+ * @brief Human-readable name for an @ref ObjectTypes value.
+ */
 inline std::string type_name_for_object_type(int object_type) {
     switch (object_type) {
     case ObjectTypes::HEADER:
@@ -516,6 +715,10 @@ inline std::string type_name_for_object_type(int object_type) {
     }
 }
 
+/**
+ * @brief 8-bit RGB color.
+ * @ingroup m3g_model
+ */
 struct RgbColor {
     int red = 0;
     int green = 0;
@@ -525,6 +728,10 @@ struct RgbColor {
     }
 };
 
+/**
+ * @brief 8-bit RGBA color.
+ * @ingroup m3g_model
+ */
 struct RgbaColor {
     int red = 0;
     int green = 0;
@@ -535,6 +742,10 @@ struct RgbaColor {
     }
 };
 
+/**
+ * @brief One compressed/uncompressed section header from the file.
+ * @ingroup m3g_model
+ */
 struct SectionInfo {
     int index = 0;
     int compression_scheme = 0;
@@ -542,14 +753,27 @@ struct SectionInfo {
     int uncompressed_length = 0;
 };
 
+/**
+ * @ingroup m3g_model
+ * @brief Polymorphic base for every M3G object in @ref File::objects_by_id.
+ */
 struct Object {
-    int object_id = 0;
-    int object_type = 0;
-    int raw_length = 0;
+    int object_id = 0;     /**< @brief Sequential id assigned while parsing. */
+    int object_type = 0;   /**< @brief @ref ObjectTypes value. */
+    int raw_length = 0;    /**< @brief Payload size in the section. */
     virtual ~Object() = default;
+    /** @brief @ref type_name_for_object_type for @ref object_type. */
     std::string type_name() const { return type_name_for_object_type(object_type); }
 };
 
+/**
+ * @brief M3G file header object.
+ * @ingroup m3g_model
+ */
+/**
+ * @brief M3G file header object.
+ * @ingroup m3g_model
+ */
 struct HeaderObject : Object {
     int version_major = 0;
     int version_minor = 0;
@@ -559,16 +783,28 @@ struct HeaderObject : Object {
     std::string authoring_field;
 };
 
+/**
+ * @brief External reference URI object.
+ * @ingroup m3g_model
+ */
 struct ExternalReferenceObject : Object {
     std::string uri;
 };
 
+/**
+ * @brief Common Object3D user id / animation track list.
+ * @ingroup m3g_model
+ */
 struct Object3DMeta {
     int user_id = 0;
     std::vector<int> animation_track_ids;
     int user_parameter_count = 0;
 };
 
+/**
+ * @brief TRS component transform (translation, orientation, scale).
+ * @ingroup m3g_model
+ */
 struct ComponentTransform {
     std::vector<float> translation{0, 0, 0};
     std::vector<float> scale{1, 1, 1};
@@ -576,12 +812,20 @@ struct ComponentTransform {
     std::vector<float> orientation_axis{0, 0, 1};
 };
 
+/**
+ * @brief Object3D meta plus optional component or matrix transform.
+ * @ingroup m3g_model
+ */
 struct TransformableMeta {
     Object3DMeta object3d;
     std::optional<ComponentTransform> component_transform;
     std::optional<std::vector<float>> general_transform;
 };
 
+/**
+ * @brief Node alignment targets and references.
+ * @ingroup m3g_model
+ */
 struct Alignment {
     int z_target = 0;
     int y_target = 0;
@@ -589,6 +833,10 @@ struct Alignment {
     std::optional<int> y_reference_id;
 };
 
+/**
+ * @brief Node rendering/picking flags and transformable meta.
+ * @ingroup m3g_model
+ */
 struct NodeMeta {
     TransformableMeta transformable;
     bool enable_rendering = true;
@@ -598,24 +846,56 @@ struct NodeMeta {
     std::optional<Alignment> alignment;
 };
 
+/**
+ * @brief Base for scene graph nodes.
+ * @ingroup m3g_model
+ */
+/**
+ * @brief Base for scene graph nodes.
+ * @ingroup m3g_model
+ */
 struct NodeObject : virtual Object {
     NodeMeta node_meta;
 };
 
+/**
+ * @brief Node with child object ids.
+ * @ingroup m3g_model
+ */
+/**
+ * @brief Node with child object ids.
+ * @ingroup m3g_model
+ */
 struct GroupLikeObject : NodeObject {
     std::vector<int> child_ids;
 };
 
+/**
+ * @brief M3G Group.
+ * @ingroup m3g_model
+ */
 struct GroupObject : GroupLikeObject {
     GroupObject() { object_type = ObjectTypes::GROUP; }
 };
 
+/**
+ * @brief M3G World (root group + optional camera/background).
+ * @ingroup m3g_model
+ */
+/**
+ * @brief M3G World (root group + optional camera/background).
+ * @ingroup m3g_model
+ */
 struct WorldObject : GroupLikeObject {
     WorldObject() { object_type = ObjectTypes::WORLD; }
     std::optional<int> active_camera_id;
     std::optional<int> background_id;
 };
 
+/**
+ * @brief Perspective projection parameters.
+ * @ingroup m3g_model
+ */
 struct PerspectiveProjection {
     float field_of_view_degrees = 45.f;
     float aspect_ratio = 1.f;
@@ -623,11 +903,19 @@ struct PerspectiveProjection {
     float far_distance = 100.f;
 };
 
+/**
+ * @brief Generic projection matrix/type payload.
+ * @ingroup m3g_model
+ */
 struct GenericProjection {
     int projection_type = 0;
     std::vector<float> values;
 };
 
+/**
+ * @brief M3G Camera.
+ * @ingroup m3g_model
+ */
 struct CameraObject : NodeObject {
     CameraObject() { object_type = ObjectTypes::CAMERA; }
     int projection_type = 0;
@@ -635,6 +923,10 @@ struct CameraObject : NodeObject {
     std::optional<GenericProjection> generic;
 };
 
+/**
+ * @brief M3G Light.
+ * @ingroup m3g_model
+ */
 struct LightObject : NodeObject {
     LightObject() { object_type = ObjectTypes::LIGHT; }
     float attenuation_constant = 1.f;
@@ -647,6 +939,10 @@ struct LightObject : NodeObject {
     float spot_exponent = 0.f;
 };
 
+/**
+ * @brief M3G Background.
+ * @ingroup m3g_model
+ */
 struct BackgroundObject : Object {
     BackgroundObject() { object_type = ObjectTypes::BACKGROUND; }
     Object3DMeta object3d;
@@ -662,6 +958,10 @@ struct BackgroundObject : Object {
     bool color_clear_enabled = true;
 };
 
+/**
+ * @brief M3G Fog.
+ * @ingroup m3g_model
+ */
 struct FogObject : Object {
     FogObject() { object_type = ObjectTypes::FOG; }
     Object3DMeta object3d;
@@ -672,6 +972,10 @@ struct FogObject : Object {
     float far_distance = 0.f;
 };
 
+/**
+ * @brief M3G PolygonMode.
+ * @ingroup m3g_model
+ */
 struct PolygonModeObject : Object {
     PolygonModeObject() { object_type = ObjectTypes::POLYGON_MODE; }
     Object3DMeta object3d;
@@ -683,6 +987,10 @@ struct PolygonModeObject : Object {
     bool perspective_correction_enabled = false;
 };
 
+/**
+ * @brief M3G Material.
+ * @ingroup m3g_model
+ */
 struct MaterialObject : Object {
     MaterialObject() { object_type = ObjectTypes::MATERIAL; }
     Object3DMeta object3d;
@@ -694,6 +1002,10 @@ struct MaterialObject : Object {
     bool vertex_color_tracking_enabled = false;
 };
 
+/**
+ * @brief M3G VertexArray.
+ * @ingroup m3g_model
+ */
 struct VertexArrayObject : Object {
     VertexArrayObject() { object_type = ObjectTypes::VERTEX_ARRAY; }
     Object3DMeta object3d;
@@ -704,12 +1016,20 @@ struct VertexArrayObject : Object {
     std::vector<int> components;
 };
 
+/**
+ * @brief Texture coordinate stream binding.
+ * @ingroup m3g_model
+ */
 struct TexCoordBinding {
     std::optional<int> vertex_array_id;
     std::vector<float> bias{0, 0, 0};
     float scale = 1.f;
 };
 
+/**
+ * @brief M3G VertexBuffer.
+ * @ingroup m3g_model
+ */
 struct VertexBufferObject : Object {
     VertexBufferObject() { object_type = ObjectTypes::VERTEX_BUFFER; }
     Object3DMeta object3d;
@@ -722,6 +1042,10 @@ struct VertexBufferObject : Object {
     std::vector<TexCoordBinding> tex_coord_bindings;
 };
 
+/**
+ * @brief M3G TriangleStripArray index buffer.
+ * @ingroup m3g_model
+ */
 struct TriangleStripArrayObject : Object {
     TriangleStripArrayObject() { object_type = ObjectTypes::TRIANGLE_STRIP_ARRAY; }
     Object3DMeta object3d;
@@ -730,6 +1054,10 @@ struct TriangleStripArrayObject : Object {
     std::vector<int> strip_lengths;
 };
 
+/**
+ * @brief M3G Appearance.
+ * @ingroup m3g_model
+ */
 struct AppearanceObject : Object {
     AppearanceObject() { object_type = ObjectTypes::APPEARANCE; }
     Object3DMeta object3d;
@@ -741,6 +1069,10 @@ struct AppearanceObject : Object {
     std::vector<int> texture_ids;
 };
 
+/**
+ * @brief M3G Texture2D.
+ * @ingroup m3g_model
+ */
 struct Texture2DObject : Object {
     Texture2DObject() { object_type = ObjectTypes::TEXTURE_2D; }
     TransformableMeta transformable;
@@ -753,6 +1085,10 @@ struct Texture2DObject : Object {
     int image_filter = 0;
 };
 
+/**
+ * @brief M3G Image2D.
+ * @ingroup m3g_model
+ */
 struct Image2DObject : Object {
     Image2DObject() { object_type = ObjectTypes::IMAGE_2D; }
     Object3DMeta object3d;
@@ -764,20 +1100,40 @@ struct Image2DObject : Object {
     std::optional<std::vector<std::uint8_t>> pixels;
 };
 
+/**
+ * @brief Index buffer + appearance reference for a submesh.
+ * @ingroup m3g_model
+ */
 struct SubmeshRef {
     std::optional<int> index_buffer_id;
     std::optional<int> appearance_id;
 };
 
+/**
+ * @brief Shared mesh fields (vertex buffer + submeshes).
+ * @ingroup m3g_model
+ */
+/**
+ * @brief Shared mesh fields (vertex buffer + submeshes).
+ * @ingroup m3g_model
+ */
 struct MeshLikeObject : NodeObject {
     std::optional<int> vertex_buffer_id;
     std::vector<SubmeshRef> submeshes;
 };
 
+/**
+ * @brief M3G Mesh.
+ * @ingroup m3g_model
+ */
 struct MeshObject : MeshLikeObject {
     MeshObject() { object_type = ObjectTypes::MESH; }
 };
 
+/**
+ * @brief Bone influence range on a skinned mesh.
+ * @ingroup m3g_model
+ */
 struct SkinnedMeshBoneTransform {
     std::optional<int> transform_node_id;
     int first_vertex = 0;
@@ -785,12 +1141,20 @@ struct SkinnedMeshBoneTransform {
     int weight = 0;
 };
 
+/**
+ * @brief M3G SkinnedMesh.
+ * @ingroup m3g_model
+ */
 struct SkinnedMeshObject : MeshLikeObject {
     SkinnedMeshObject() { object_type = ObjectTypes::SKINNED_MESH; }
     std::optional<int> skeleton_id;
     std::vector<SkinnedMeshBoneTransform> bone_transforms;
 };
 
+/**
+ * @brief M3G AnimationController.
+ * @ingroup m3g_model
+ */
 struct AnimationControllerObject : Object {
     AnimationControllerObject() { object_type = ObjectTypes::ANIMATION_CONTROLLER; }
     Object3DMeta object3d;
@@ -802,6 +1166,10 @@ struct AnimationControllerObject : Object {
     int reference_world_time = 0;
 };
 
+/**
+ * @brief M3G AnimationTrack.
+ * @ingroup m3g_model
+ */
 struct AnimationTrackObject : Object {
     AnimationTrackObject() { object_type = ObjectTypes::ANIMATION_TRACK; }
     Object3DMeta object3d;
@@ -810,11 +1178,19 @@ struct AnimationTrackObject : Object {
     int property_id = 0;
 };
 
+/**
+ * @brief One keyframe time + value vector.
+ * @ingroup m3g_model
+ */
 struct Keyframe {
     int time = 0;
     std::vector<float> values;
 };
 
+/**
+ * @brief M3G KeyframeSequence.
+ * @ingroup m3g_model
+ */
 struct KeyframeSequenceObject : Object {
     KeyframeSequenceObject() { object_type = ObjectTypes::KEYFRAME_SEQUENCE; }
     Object3DMeta object3d;
@@ -828,14 +1204,22 @@ struct KeyframeSequenceObject : Object {
     std::vector<Keyframe> keyframes;
 };
 
+/**
+ * @brief Unrecognized or skipped object payload.
+ * @ingroup m3g_model
+ */
 struct UnknownObject : Object {
     std::vector<std::uint8_t> raw_data;
 };
 
+/**
+ * @ingroup m3g_model
+ * @brief Complete parsed M3G file (header, sections, object map).
+ */
 struct File {
-    std::shared_ptr<HeaderObject> header;
-    std::vector<SectionInfo> sections;
-    std::map<int, std::shared_ptr<Object>> objects_by_id;
+    std::shared_ptr<HeaderObject> header;                 /**< @brief File header object, if present. */
+    std::vector<SectionInfo> sections;                    /**< @brief Section table. */
+    std::map<int, std::shared_ptr<Object>> objects_by_id;  /**< @brief Objects keyed by @ref Object::object_id. */
 
     std::vector<std::shared_ptr<Object>> objects_in_order() const {
         std::vector<std::shared_ptr<Object>> out;
@@ -892,8 +1276,17 @@ inline bool is_identity_row_major(const std::vector<float> &m, float epsilon = 1
 
 } // namespace model
 
+/**
+ * @ingroup m3g_scene
+ * @namespace m3g::scene
+ * @brief Intermediate scene graph used for glTF export.
+ */
 namespace scene {
 
+/**
+ * @ingroup m3g_scene
+ * @brief Non-fatal conversion note (code + message).
+ */
 struct ConversionWarning {
     std::string code;
     std::string message;
@@ -902,6 +1295,10 @@ struct ConversionWarning {
     }
 };
 
+/**
+ * @brief RGBA8 pixels embedded in the IR (from M3G Image2D).
+ * @ingroup m3g_scene
+ */
 struct EmbeddedRgbaImageSource {
     int object_id = 0;
     int width = 0;
@@ -909,17 +1306,29 @@ struct EmbeddedRgbaImageSource {
     std::vector<std::uint8_t> pixels;
 };
 
+/**
+ * @brief Image referenced by filesystem path.
+ * @ingroup m3g_scene
+ */
 struct ExternalFileImageSource {
     int object_id = 0;
     std::string source_path;
 };
 
+/**
+ * @brief One glTF image source (exactly one of embedded / external).
+ * @ingroup m3g_scene
+ */
 struct SceneImageIr {
     std::string name;
     std::optional<EmbeddedRgbaImageSource> embedded;
     std::optional<ExternalFileImageSource> external;
 };
 
+/**
+ * @brief glTF sampler parameters.
+ * @ingroup m3g_scene
+ */
 struct SceneSamplerIr {
     std::optional<int> mag_filter;
     std::optional<int> min_filter;
@@ -927,12 +1336,20 @@ struct SceneSamplerIr {
     int wrap_t = 0;
 };
 
+/**
+ * @brief glTF texture linking image + optional sampler.
+ * @ingroup m3g_scene
+ */
 struct SceneTextureIr {
     std::string name;
     int image_index = 0;
     std::optional<int> sampler_index;
 };
 
+/**
+ * @brief glTF PBR metallic-roughness material fields.
+ * @ingroup m3g_scene
+ */
 struct SceneMaterialIr {
     std::string name;
     std::vector<float> base_color_factor{1, 1, 1, 1};
@@ -944,6 +1361,10 @@ struct SceneMaterialIr {
     std::optional<std::string> alpha_mode;
 };
 
+/**
+ * @brief Triangle mesh primitive (interleaved-friendly arrays).
+ * @ingroup m3g_scene
+ */
 struct ScenePrimitiveIr {
     std::string name;
     std::vector<float> positions;
@@ -954,11 +1375,19 @@ struct ScenePrimitiveIr {
     std::optional<int> material_index;
 };
 
+/**
+ * @brief Mesh with one or more primitives.
+ * @ingroup m3g_scene
+ */
 struct SceneMeshIr {
     std::string name;
     std::vector<ScenePrimitiveIr> primitives;
 };
 
+/**
+ * @brief Perspective camera parameters (radians).
+ * @ingroup m3g_scene
+ */
 struct ScenePerspectiveCameraIr {
     float yfov_radians = 0.f;
     std::optional<float> aspect_ratio;
@@ -966,11 +1395,19 @@ struct ScenePerspectiveCameraIr {
     std::optional<float> zfar;
 };
 
+/**
+ * @brief Named camera (perspective optional).
+ * @ingroup m3g_scene
+ */
 struct SceneCameraIr {
     std::string name;
     std::optional<ScenePerspectiveCameraIr> perspective;
 };
 
+/**
+ * @brief Scene graph node; TRS and/or matrix, mesh/camera refs, children.
+ * @ingroup m3g_scene
+ */
 struct SceneNodeIr {
     std::string name;
     std::optional<std::vector<float>> matrix;
@@ -982,6 +1419,10 @@ struct SceneNodeIr {
     std::vector<int> children;
 };
 
+/**
+ * @brief Animation sampler input/output floats.
+ * @ingroup m3g_scene
+ */
 struct SceneAnimationSamplerIr {
     std::vector<float> times;
     std::vector<float> values;
@@ -989,21 +1430,35 @@ struct SceneAnimationSamplerIr {
     int component_count = 3;
 };
 
+/**
+ * @brief Channel binding sampler → node path.
+ * @ingroup m3g_scene
+ */
 struct SceneAnimationChannelIr {
     int sampler_index = 0;
     int node_index = 0;
     std::string path;
 };
 
+/**
+ * @brief Named animation clip.
+ * @ingroup m3g_scene
+ */
 struct SceneAnimationIr {
     std::string name;
     std::vector<SceneAnimationSamplerIr> samplers;
     std::vector<SceneAnimationChannelIr> channels;
 };
 
+/**
+ * @ingroup m3g_scene
+ * @brief Full intermediate representation ready for glTF export.
+ *
+ * Indices in nodes/meshes/materials/… refer to positions in the parallel arrays.
+ */
 struct SceneIr {
     std::vector<SceneNodeIr> nodes;
-    std::vector<int> root_node_indices;
+    std::vector<int> root_node_indices;  /**< @brief Indices into @ref nodes for the default scene. */
     std::vector<SceneMeshIr> meshes;
     std::vector<SceneMaterialIr> materials;
     std::vector<SceneTextureIr> textures;
@@ -1014,21 +1469,37 @@ struct SceneIr {
     std::vector<ConversionWarning> warnings;
 };
 
+/**
+ * @ingroup m3g_scene
+ * @brief Paths produced by a glTF write (mirrors @ref m3g::exp::GltfPaths).
+ */
 struct GltfWriteResult {
-    std::string gltf_path;
-    std::string bin_path;
-    std::vector<std::string> image_paths;
+    std::string gltf_path;                 /**< @brief Written `.gltf` / `.glb` path. */
+    std::string bin_path;                  /**< @brief Companion `.bin` when applicable. */
+    std::vector<std::string> image_paths;  /**< @brief External image files written, if any. */
 };
 
 } // namespace scene
 
+/**
+ * @ingroup m3g_decode
+ * @namespace m3g::decode
+ * @brief High-level M3G decode entry points.
+ */
 namespace decode {
 
+/**
+ * @ingroup m3g_decode
+ * @brief Result of decoding one M3G asset.
+ */
 struct Decoded {
-    std::string source_path;
-    model::File file;
-    scene::SceneIr scene_ir;
+    std::string source_path;   /**< @brief Normalized path or caller-supplied label. */
+    model::File file;          /**< @brief Parsed object graph. */
+    scene::SceneIr scene_ir;   /**< @brief Export-ready intermediate scene. */
 
+    /** @name Scene tallies
+     *  @{
+     */
     std::size_t node_count() const { return scene_ir.nodes.size(); }
     std::size_t mesh_count() const { return scene_ir.meshes.size(); }
     std::size_t material_count() const { return scene_ir.materials.size(); }
@@ -1036,53 +1507,126 @@ struct Decoded {
     std::size_t image_count() const { return scene_ir.images.size(); }
     std::size_t camera_count() const { return scene_ir.cameras.size(); }
     std::size_t animation_count() const { return scene_ir.animations.size(); }
+    /** @} */
+
+    /** @brief Conversion warnings collected while building @ref scene_ir. */
     const std::vector<scene::ConversionWarning> &warnings() const { return scene_ir.warnings; }
 };
 
+/**
+ * @ingroup m3g_decode
+ * @brief Optional decode knobs.
+ */
 struct DecodeOptions {
+    /**
+     * @brief Optional external pattern image applied to untextured materials.
+     */
     std::optional<std::string> pattern_path;
 };
 
+/**
+ * @ingroup m3g_decode
+ * @brief M3G path/bytes → @ref Decoded (parse + scene build + optional pattern).
+ *
+ * Requires @ref m3g::DeflateIo when the file uses compressed sections, and
+ * @ref m3g::ImageIo when decoding embedded/external raster images.
+ */
 class Decoder {
 public:
+    /**
+     * @brief Decode an `.m3g` file from disk.
+     * @param input_path Filesystem path.
+     * @param options Optional pattern path, etc.
+     * @return Value-semantic @ref Decoded.
+     * @throws std::runtime_error on I/O or parse failure.
+     */
     Decoded decode_file(const std::string &input_path, const DecodeOptions &options = {}) const;
+
+    /**
+     * @brief Decode M3G bytes already in memory.
+     * @param bytes File contents.
+     * @param source_path Label used for diagnostics / relative resolves (may be empty).
+     * @param options Optional pattern path, etc.
+     */
     Decoded decode_bytes(const std::vector<std::uint8_t> &bytes, const std::string &source_path,
                          const DecodeOptions &options = {}) const;
 };
 
 } // namespace decode
 
+/**
+ * @ingroup m3g_export
+ * @namespace m3g::exp
+ * @brief glTF export types and writer.
+ */
 namespace exp {
 
+/**
+ * @ingroup m3g_export
+ * @brief On-disk paths produced by a successful export.
+ */
 struct GltfPaths {
-    std::string gltf_path;
-    std::string bin_path;
-    std::vector<std::string> image_paths;
+    std::string gltf_path;                /**< @brief Output `.gltf` or `.glb`. */
+    std::string bin_path;                 /**< @brief `.bin` path when separate. */
+    std::vector<std::string> image_paths; /**< @brief External image files written. */
 };
 
+/**
+ * @ingroup m3g_export
+ * @brief Decode result plus export paths (full pipeline report).
+ */
 struct ExportReport {
-    decode::Decoded decoded;
-    GltfPaths paths;
+    decode::Decoded decoded; /**< @brief Decoded source asset. */
+    GltfPaths paths;         /**< @brief Written glTF artifacts. */
 };
 
+/**
+ * @ingroup m3g_export
+ * @brief Write @ref m3g::scene::SceneIr (or @ref m3g::decode::Decoded) as glTF 2.0.
+ *
+ * Implementation uses cgltf_write; PNG encode may use stb_image_write.
+ */
 class GltfExporter {
 public:
+    /**
+     * @brief Export @p decoded.scene_ir.
+     * @param output_path Destination ending in `.gltf` or `.glb`.
+     * @param overwrite Replace existing outputs when true.
+     * @param png_compression_level zlib level 0–9 for written PNGs.
+     */
     GltfPaths write(const decode::Decoded &decoded, const std::string &output_path, bool overwrite,
                     int png_compression_level = 8) const;
+
+    /** @brief Export a scene IR directly. */
     GltfPaths write(const scene::SceneIr &scene_ir, const std::string &output_path, bool overwrite,
                     int png_compression_level = 8) const;
 };
 
 } // namespace exp
 
+/**
+ * @ingroup m3g_export
+ * @brief Facade: decode M3G and/or export glTF in one object.
+ *
+ * Prefer @ref m3g::decode::Decoder / @ref m3g::exp::GltfExporter for a single stage.
+ */
 class Converter {
 public:
+    /**
+     * @brief Decode only (`Decoder` + optional pattern).
+     * @param pattern_path External pattern image for untextured materials.
+     */
     decode::Decoded decode(const std::string &input_path,
                            const std::optional<std::string> &pattern_path = std::nullopt) const;
 
+    /** @brief Export a previously decoded asset. */
     exp::GltfPaths export_gltf(const decode::Decoded &decoded, const std::string &output_path, bool overwrite,
                                int png_compression_level = 8) const;
 
+    /**
+     * @brief Full pipeline: decode @p input_path then write @p output_path.
+     * @return Combined @ref exp::ExportReport.
+     */
     exp::ExportReport convert(const std::string &input_path, const std::string &output_path, bool overwrite,
                               const std::optional<std::string> &pattern_path = std::nullopt,
                               int png_compression_level = 8) const;
@@ -1154,6 +1698,27 @@ inline JsonIo const *json_io(void) {
     if (!s.create_object && !s.create_array && !s.create_string && !s.create_number && !s.create_bool &&
         !s.add_item_to_object && !s.add_item_to_array && !s.get_array_size && !s.delete_node &&
         !s.print_unformatted && !s.print_formatted && !s.free_print) {
+        return nullptr;
+    }
+    return &s;
+}
+
+inline GltfIo &gltf_io_storage() {
+    static GltfIo storage{};
+    return storage;
+}
+
+inline void set_gltf_io(GltfIo const *io) {
+    if (!io) {
+        gltf_io_storage() = GltfIo{};
+        return;
+    }
+    gltf_io_storage() = *io;
+}
+
+inline GltfIo const *gltf_io(void) {
+    GltfIo const &s = gltf_io_storage();
+    if (!s.write_file && !s.parse_file && !s.validate && !s.free_data) {
         return nullptr;
     }
     return &s;

@@ -2,8 +2,9 @@
 
 ## High priority
 
-- Add embedded documentation in the header file, requires the doxygen style.
-  - This allows the direct generation for the documentation files.
+
+- ~~Add embedded documentation in the header file (doxygen)~~ → public API in
+  `include/m3g.hpp` (`@file`, `@defgroup`, decode/export/I/O, model/scene).
 - ~~Fix project naming~~ → project/binary/namespace `m3g` (was `slop`).
 - Add BUILD.md for instructing dependencies required to install for build.
 
