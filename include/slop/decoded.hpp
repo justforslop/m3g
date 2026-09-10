@@ -23,6 +23,7 @@ struct Decoded {
     std::size_t texture_count() const { return scene_ir.textures.size(); }
     std::size_t image_count() const { return scene_ir.images.size(); }
     std::size_t camera_count() const { return scene_ir.cameras.size(); }
+    std::size_t animation_count() const { return scene_ir.animations.size(); }
     const std::vector<scene::ConversionWarning> &warnings() const { return scene_ir.warnings; }
 };
 

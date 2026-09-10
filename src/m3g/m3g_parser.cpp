@@ -5,7 +5,9 @@
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
-#include <zlib.h>
+
+#define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+#include "miniz.h"
 
 namespace slop {
 namespace m3g {
@@ -509,11 +511,30 @@ std::shared_ptr<Object> parse_keyframe_sequence(int object_id, int raw_length, B
     obj->valid_range_last = to_checked_int(reader.read_u32_le(), "sequence validRangeLast");
     obj->component_count = to_checked_int(reader.read_u32_le(), "sequence componentCount");
     const int keyframe_count = to_checked_int(reader.read_u32_le(), "sequence keyframeCount");
-    for (int i = 0; i < keyframe_count; ++i) {
-        Keyframe kf;
-        kf.time = reader.read_i32_le();
-        kf.values = read_float_array(reader, obj->component_count);
-        obj->keyframes.push_back(std::move(kf));
+    if (obj->encoding == 0) {
+        for (int i = 0; i < keyframe_count; ++i) {
+            Keyframe kf;
+            kf.time = reader.read_i32_le();
+            kf.values = read_float_array(reader, obj->component_count);
+            obj->keyframes.push_back(std::move(kf));
+        }
+    } else if (obj->encoding == 1 || obj->encoding == 2) {
+        const auto bias = read_float_array(reader, obj->component_count);
+        const float scale = reader.read_f32_le();
+        for (int i = 0; i < keyframe_count; ++i) {
+            Keyframe kf;
+            kf.time = reader.read_i32_le();
+            kf.values.resize(static_cast<std::size_t>(obj->component_count));
+            for (int c = 0; c < obj->component_count; ++c) {
+                const float raw = obj->encoding == 1 ? static_cast<float>(reader.read_i16_le())
+                                                     : static_cast<float>(reader.read_i8());
+                kf.values[static_cast<std::size_t>(c)] =
+                    raw * scale + bias[static_cast<std::size_t>(c)];
+            }
+            obj->keyframes.push_back(std::move(kf));
+        }
+    } else {
+        throw std::runtime_error("Unsupported KeyframeSequence encoding " + std::to_string(obj->encoding));
     }
     return obj;
 }
@@ -616,25 +637,49 @@ File Parser::parse(const std::vector<std::uint8_t> &bytes) const {
         if (total_section_length < 13) {
             throw std::runtime_error("Section has invalid total length");
         }
-        if (total_section_length != 13 + uncompressed_length) {
+        const int payload_length = total_section_length - 13;
+        if (payload_length < 0) {
+            throw std::runtime_error("Section payload length is negative");
+        }
+        if (compression_scheme == 0 && payload_length != uncompressed_length) {
             throw std::runtime_error("Section length mismatch");
         }
-        if (compression_scheme != 0) {
-            throw std::runtime_error("Compressed sections are not supported");
+        if (compression_scheme != 0 && compression_scheme != 1) {
+            throw std::runtime_error("Unsupported section compression scheme " +
+                                     std::to_string(compression_scheme));
         }
 
-        auto object_bytes = reader.read_bytes(static_cast<std::size_t>(uncompressed_length));
+        auto payload_bytes = reader.read_bytes(static_cast<std::size_t>(payload_length));
         const std::uint32_t expected_checksum = reader.read_u32_le();
 
-        std::vector<std::uint8_t> checksum_input(1 + 4 + 4 + object_bytes.size());
+        std::vector<std::uint8_t> checksum_input(1 + 4 + 4 + payload_bytes.size());
         checksum_input[0] = static_cast<std::uint8_t>(compression_scheme);
         write_u32_le(checksum_input.data(), 1, total_section_length);
         write_u32_le(checksum_input.data(), 5, uncompressed_length);
-        std::memcpy(checksum_input.data() + 9, object_bytes.data(), object_bytes.size());
-        const std::uint32_t checksum =
-            adler32(1L, checksum_input.data(), static_cast<uInt>(checksum_input.size()));
+        if (!payload_bytes.empty()) {
+            std::memcpy(checksum_input.data() + 9, payload_bytes.data(), payload_bytes.size());
+        }
+        const std::uint32_t checksum = static_cast<std::uint32_t>(
+            mz_adler32(MZ_ADLER32_INIT, checksum_input.data(), checksum_input.size()));
         if (checksum != expected_checksum) {
             throw std::runtime_error("Section checksum mismatch");
+        }
+
+        std::vector<std::uint8_t> object_bytes;
+        if (compression_scheme == 0) {
+            object_bytes = std::move(payload_bytes);
+        } else {
+            object_bytes.resize(static_cast<std::size_t>(uncompressed_length));
+            mz_ulong dest_len = static_cast<mz_ulong>(uncompressed_length);
+            const int rc = mz_uncompress(object_bytes.data(), &dest_len, payload_bytes.data(),
+                                         static_cast<mz_ulong>(payload_bytes.size()));
+            if (rc != MZ_OK) {
+                throw std::runtime_error("Failed to inflate compressed M3G section (miniz " +
+                                         std::to_string(rc) + ")");
+            }
+            if (dest_len != static_cast<mz_ulong>(uncompressed_length)) {
+                throw std::runtime_error("Inflated M3G section size mismatch");
+            }
         }
 
         file.sections.push_back(SectionInfo{section_index, compression_scheme, total_section_length,

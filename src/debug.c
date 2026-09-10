@@ -15,6 +15,7 @@
  * Compiled as C++ (g++ -x c++) so we can use <slop/decode.hpp>.
  */
 #define SOKOL_IMPL
+#define SOKOL_TIME_IMPL
 #define SOKOL_GLCORE
 #include "sokol/sokol_gfx.h"
 #include "sokol/sokol_app.h"
@@ -22,6 +23,15 @@
 #include "sokol/sokol_glue.h"
 #define SOKOL_GL_IMPL
 #include "sokol/util/sokol_gl.h"
+#include "sokol/sokol_time.h"
+
+#include "imgui.h"
+#define SOKOL_IMGUI_IMPL
+#include "sokol/util/sokol_imgui.h"
+#define SOKOL_GFX_IMGUI_IMPL
+#include "sokol/util/sokol_gfx_imgui.h"
+#define SOKOL_APP_IMGUI_IMPL
+#include "sokol/util/sokol_app_imgui.h"
 
 #include <slop/decode.hpp>
 
@@ -91,10 +101,27 @@ Vec3 vec3_normalize(Vec3 v) {
     return Vec3{v.x / len, v.y / len, v.z / len};
 }
 
+Vec3 light_dir_from_latlon(float latitude_deg, float longitude_deg) {
+    const float lat = latitude_deg * 0.01745329252f;
+    const float lng = longitude_deg * 0.01745329252f;
+    return vec3_normalize(Vec3{
+        std::cos(lat) * std::sin(lng),
+        std::sin(lat),
+        std::cos(lat) * std::cos(lng),
+    });
+}
+
 struct TriVertex {
     Vec3 pos;
     Vec3 nrm;
+    float u = 0.f, v = 0.f;
     float r = 0.8f, g = 0.8f, b = 0.85f;
+    int tex = -1; // scene image index, or -1
+};
+
+struct GpuImage {
+    sg_image img{};
+    sg_view view{};
 };
 
 struct App {
@@ -103,12 +130,30 @@ struct App {
     std::string status;
     slop::decode::Decoded decoded;
     std::vector<TriVertex> tris; // expanded triangle list (3 verts each)
+    std::vector<GpuImage> gpu_images;
+    std::vector<char> mesh_visible;
+    sg_sampler sampler{};
+    sgl_pipeline pip{};
 
     float lat = 20.f;
     float lon = 35.f;
     float dist = 0.f;
     Vec3 center{};
+    float orig_lat = 20.f;
+    float orig_lon = 35.f;
+    float orig_dist = 0.f;
+    Vec3 orig_center{};
     float radius = 1.f;
+    float ambient = 0.35f;
+    bool draw_enabled = true;
+    bool draw_textures = true;
+    bool two_sided_light = true;
+    bool light_enabled = true;
+    bool light_dbg_draw = true;
+    float light_lat = 45.f;
+    float light_lon = -45.f;
+    float light_intensity = 1.f;
+    float light_color[3] = {1.f, 1.f, 1.f};
 
     bool dragging = false;
     float last_x = 0, last_y = 0;
@@ -117,6 +162,21 @@ struct App {
 };
 
 App g;
+
+void draw_light_debug(void) {
+    if (!g.light_enabled || !g.light_dbg_draw) {
+        return;
+    }
+    const Vec3 dir = light_dir_from_latlon(g.light_lat, g.light_lon);
+    const float len = g.radius * 0.75f;
+    const float y = g.center.y;
+    sgl_disable_texture();
+    sgl_c3f(g.light_color[0], g.light_color[1], g.light_color[2]);
+    sgl_begin_lines();
+    sgl_v3f(g.center.x, y, g.center.z);
+    sgl_v3f(g.center.x + dir.x * len, y + dir.y * len, g.center.z + dir.z * len);
+    sgl_end();
+}
 
 void compute_bounds(const std::vector<TriVertex> &tris, Vec3 *out_center, float *out_radius) {
     if (tris.empty()) {
@@ -146,6 +206,26 @@ void compute_bounds(const std::vector<TriVertex> &tris, Vec3 *out_center, float 
     }
 }
 
+int material_image_index(const slop::scene::SceneIr &scene, const slop::scene::ScenePrimitiveIr &prim) {
+    if (!prim.material_index || *prim.material_index < 0 ||
+        *prim.material_index >= static_cast<int>(scene.materials.size())) {
+        return -1;
+    }
+    const auto &mat = scene.materials[static_cast<std::size_t>(*prim.material_index)];
+    if (!mat.base_color_texture_index) {
+        return -1;
+    }
+    const int tex_i = *mat.base_color_texture_index;
+    if (tex_i < 0 || tex_i >= static_cast<int>(scene.textures.size())) {
+        return -1;
+    }
+    const int img_i = scene.textures[static_cast<std::size_t>(tex_i)].image_index;
+    if (img_i < 0 || img_i >= static_cast<int>(scene.images.size())) {
+        return -1;
+    }
+    return img_i;
+}
+
 void append_mesh(const slop::scene::SceneIr &scene, int mesh_index, const Mat4 &world,
                  const float base_color[3], std::vector<TriVertex> *out) {
     if (mesh_index < 0 || mesh_index >= static_cast<int>(scene.meshes.size())) {
@@ -163,11 +243,16 @@ void append_mesh(const slop::scene::SceneIr &scene, int mesh_index, const Mat4 &
                 b = mat.base_color_factor[2];
             }
         }
+        const int tex = material_image_index(scene, prim);
         const int nidx = static_cast<int>(prim.indices.size());
+        const int nverts = static_cast<int>(prim.positions.size() / 3);
         for (int i = 0; i + 2 < nidx; i += 3) {
             TriVertex tv[3];
             for (int k = 0; k < 3; ++k) {
                 const int vi = prim.indices[static_cast<std::size_t>(i + k)];
+                if (vi < 0 || vi >= nverts) {
+                    continue;
+                }
                 const float px = prim.positions[static_cast<std::size_t>(vi * 3 + 0)];
                 const float py = prim.positions[static_cast<std::size_t>(vi * 3 + 1)];
                 const float pz = prim.positions[static_cast<std::size_t>(vi * 3 + 2)];
@@ -181,9 +266,25 @@ void append_mesh(const slop::scene::SceneIr &scene, int mesh_index, const Mat4 &
                 } else {
                     tv[k].nrm = {0, 1, 0};
                 }
-                tv[k].r = r;
-                tv[k].g = g;
-                tv[k].b = b;
+                float vr = r, vg = g, vb = b;
+                if (prim.vertex_colors) {
+                    const auto &vc = *prim.vertex_colors;
+                    const int comps = (static_cast<int>(vc.size()) == nverts * 4) ? 4 : 3;
+                    if (static_cast<std::size_t>(vi * comps + 2) < vc.size()) {
+                        // Vertex colors *are* the painted pattern (e.g. Mesh_269 base).
+                        vr = vc[static_cast<std::size_t>(vi * comps + 0)];
+                        vg = vc[static_cast<std::size_t>(vi * comps + 1)];
+                        vb = vc[static_cast<std::size_t>(vi * comps + 2)];
+                    }
+                }
+                tv[k].r = vr;
+                tv[k].g = vg;
+                tv[k].b = vb;
+                tv[k].tex = tex;
+                if (prim.tex_coords0 && static_cast<std::size_t>(vi * 2 + 1) < prim.tex_coords0->size()) {
+                    tv[k].u = (*prim.tex_coords0)[static_cast<std::size_t>(vi * 2 + 0)];
+                    tv[k].v = (*prim.tex_coords0)[static_cast<std::size_t>(vi * 2 + 1)];
+                }
             }
             // flat normal fallback if missing
             if (!prim.normals) {
@@ -210,11 +311,49 @@ void walk_node(const slop::scene::SceneIr &scene, int node_index, const Mat4 &pa
         return;
     }
     const auto &node = scene.nodes[static_cast<std::size_t>(node_index)];
-    Mat4 local = node.matrix ? mat4_from_row_major(*node.matrix) : Mat4{};
+    Mat4 local{};
+    if (node.matrix) {
+        local = mat4_from_row_major(*node.matrix);
+    } else if (node.translation || node.rotation || node.scale) {
+        const float tx = node.translation ? (*node.translation)[0] : 0.f;
+        const float ty = node.translation ? (*node.translation)[1] : 0.f;
+        const float tz = node.translation ? (*node.translation)[2] : 0.f;
+        const float sx = node.scale ? (*node.scale)[0] : 1.f;
+        const float sy = node.scale ? (*node.scale)[1] : 1.f;
+        const float sz = node.scale ? (*node.scale)[2] : 1.f;
+        float qx = 0, qy = 0, qz = 0, qw = 1;
+        if (node.rotation && node.rotation->size() >= 4) {
+            qx = (*node.rotation)[0];
+            qy = (*node.rotation)[1];
+            qz = (*node.rotation)[2];
+            qw = (*node.rotation)[3];
+        }
+        const float xx = qx * qx, yy = qy * qy, zz = qz * qz;
+        const float xy = qx * qy, xz = qx * qz, yz = qy * qz;
+        const float wx = qw * qx, wy = qw * qy, wz = qw * qz;
+        // row-major T * R * S
+        local.m[0] = (1.f - 2.f * (yy + zz)) * sx;
+        local.m[1] = (2.f * (xy - wz)) * sy;
+        local.m[2] = (2.f * (xz + wy)) * sz;
+        local.m[3] = tx;
+        local.m[4] = (2.f * (xy + wz)) * sx;
+        local.m[5] = (1.f - 2.f * (xx + zz)) * sy;
+        local.m[6] = (2.f * (yz - wx)) * sz;
+        local.m[7] = ty;
+        local.m[8] = (2.f * (xz - wy)) * sx;
+        local.m[9] = (2.f * (yz + wx)) * sy;
+        local.m[10] = (1.f - 2.f * (xx + yy)) * sz;
+        local.m[11] = tz;
+    }
     Mat4 world = mat4_mul(parent, local);
     if (node.mesh_index) {
-        const float defc[3] = {0.75f, 0.78f, 0.85f};
-        append_mesh(scene, *node.mesh_index, world, defc, out);
+        const int mi = *node.mesh_index;
+        if (mi >= 0 && mi < static_cast<int>(g.mesh_visible.size()) && !g.mesh_visible[static_cast<std::size_t>(mi)]) {
+            // hidden in imgui mesh list
+        } else {
+            const float defc[3] = {0.75f, 0.78f, 0.85f};
+            append_mesh(scene, mi, world, defc, out);
+        }
     }
     for (int child : node.children) {
         walk_node(scene, child, world, out);
@@ -224,6 +363,9 @@ void walk_node(const slop::scene::SceneIr &scene, int node_index, const Mat4 &pa
 void build_draw_list(void) {
     g.tris.clear();
     const auto &scene = g.decoded.scene_ir;
+    if (g.mesh_visible.size() != scene.meshes.size()) {
+        g.mesh_visible.assign(scene.meshes.size(), 1);
+    }
     Mat4 identity{};
     if (!scene.root_node_indices.empty()) {
         for (int root : scene.root_node_indices) {
@@ -235,7 +377,15 @@ void build_draw_list(void) {
         }
     }
     compute_bounds(g.tris, &g.center, &g.radius);
-    g.dist = g.radius * 2.8f;
+    if (g.orig_dist <= 0.f) {
+        g.dist = g.radius * 2.8f;
+        g.lat = 20.f;
+        g.lon = 35.f;
+        g.orig_lat = g.lat;
+        g.orig_lon = g.lon;
+        g.orig_dist = g.dist;
+        g.orig_center = g.center;
+    }
     char buf[256];
     std::snprintf(buf, sizeof(buf),
                   "%s\ntris=%zu  nodes=%zu  meshes=%zu  mats=%zu\nLMB orbit  wheel zoom  Esc quit",
@@ -244,19 +394,187 @@ void build_draw_list(void) {
     g.status = buf;
 }
 
+void destroy_gpu_images(void) {
+    for (auto &gpu : g.gpu_images) {
+        if (gpu.view.id) {
+            sg_destroy_view(gpu.view);
+        }
+        if (gpu.img.id) {
+            sg_destroy_image(gpu.img);
+        }
+    }
+    g.gpu_images.clear();
+    if (g.sampler.id) {
+        sg_destroy_sampler(g.sampler);
+        g.sampler = {};
+    }
+}
+
+void create_gpu_images(void) {
+    destroy_gpu_images();
+    sg_sampler_desc smp = {};
+    smp.min_filter = SG_FILTER_LINEAR;
+    smp.mag_filter = SG_FILTER_LINEAR;
+    smp.wrap_u = SG_WRAP_REPEAT;
+    smp.wrap_v = SG_WRAP_REPEAT;
+    g.sampler = sg_make_sampler(&smp);
+
+    const auto &images = g.decoded.scene_ir.images;
+    g.gpu_images.resize(images.size());
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        const auto &src = images[i];
+        if (!src.embedded) {
+            continue;
+        }
+        const int w = src.embedded->width;
+        const int h = src.embedded->height;
+        const auto &px = src.embedded->pixels;
+        if (w <= 0 || h <= 0 || px.size() != static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4u) {
+            continue;
+        }
+        sg_image_desc desc = {};
+        desc.width = w;
+        desc.height = h;
+        desc.pixel_format = SG_PIXELFORMAT_RGBA8;
+        desc.data.mip_levels[0].ptr = px.data();
+        desc.data.mip_levels[0].size = px.size();
+        g.gpu_images[i].img = sg_make_image(&desc);
+        sg_view_desc view = {};
+        view.texture.image = g.gpu_images[i].img;
+        g.gpu_images[i].view = sg_make_view(&view);
+    }
+}
+
 bool load_m3g(const char *path) {
     g.path = path ? path : "";
     try {
         g.decoded = slop::decode::Decoder{}.decode_file(g.path);
+        g.orig_dist = 0.f;
         build_draw_list();
+        if (sg_isvalid()) {
+            create_gpu_images();
+        }
         g.failed = false;
         return true;
     } catch (const std::exception &ex) {
         g.failed = true;
         g.status = std::string("load failed: ") + ex.what();
         g.tris.clear();
+        destroy_gpu_images();
         return false;
     }
+}
+
+void draw_ui(void) {
+    sappimgui_track_frame();
+    if (ImGui::BeginMainMenuBar()) {
+        sgimgui_draw_menu("sokol-gfx");
+        sappimgui_draw_menu("sokol-app");
+        ImGui::EndMainMenuBar();
+    }
+    sgimgui_draw();
+    sappimgui_draw();
+
+    ImGui::SetNextWindowPos(ImVec2(20, 28), ImGuiCond_Once);
+    ImGui::SetNextWindowSize(ImVec2(320, 420), ImGuiCond_Once);
+    ImGui::SetNextWindowBgAlpha(0.4f);
+    if (ImGui::Begin("slop debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (g.failed) {
+            ImGui::TextWrapped("%s", g.status.c_str());
+        } else {
+            ImGui::TextUnformatted(g.path.c_str());
+            ImGui::Text("tris %zu  nodes %zu  meshes %zu", g.tris.size() / 3, g.decoded.node_count(),
+                        g.decoded.mesh_count());
+            ImGui::Text("mats %zu  images %zu  anims %zu", g.decoded.material_count(), g.decoded.image_count(),
+                        g.decoded.animation_count());
+            ImGui::Text("frame %.2f ms", sapp_frame_duration() * 1000.0);
+            ImGui::Separator();
+            ImGui::Checkbox("Draw mesh", &g.draw_enabled);
+            ImGui::Checkbox("Draw textures", &g.draw_textures);
+            ImGui::Checkbox("Two-sided light", &g.two_sided_light);
+            ImGui::SliderFloat("Ambient", &g.ambient, 0.f, 1.f, "%.2f");
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_CheckMark, IM_COL32(0, 255, 0, 255));
+            ImGui::Checkbox("Enable Lighting", &g.light_enabled);
+            ImGui::PopStyleColor();
+            if (g.light_enabled) {
+                ImGui::Checkbox("Draw Light Vector", &g.light_dbg_draw);
+                ImGui::SliderFloat("Light Lat", &g.light_lat, -85.f, 85.f, "%.1f");
+                ImGui::SliderFloat("Light Lon", &g.light_lon, 0.f, 360.f, "%.1f");
+                ImGui::SliderFloat("Intensity", &g.light_intensity, 0.f, 10.f, "%.1f");
+                ImGui::ColorEdit3("Light Color", g.light_color);
+            }
+            ImGui::Separator();
+            ImGui::Text("Camera (LMB orbit, wheel zoom)");
+            ImGui::SliderFloat("Distance", &g.dist, g.radius * 0.2f, g.radius * 50.f, "%.1f");
+            ImGui::SliderFloat("Latitude", &g.lat, -89.f, 89.f, "%.1f");
+            ImGui::SliderFloat("Longitude", &g.lon, -360.f, 360.f, "%.1f");
+            ImGui::Separator();
+            {
+                const float span = std::max(g.radius * 8.f, 1.f);
+                const float clat = g.lat * 0.01745329252f;
+                const float clon = g.lon * 0.01745329252f;
+                float pos[3] = {
+                    g.center.x + g.dist * std::cos(clat) * std::sin(clon),
+                    g.center.y + g.dist * std::sin(clat),
+                    g.center.z + g.dist * std::cos(clat) * std::cos(clon),
+                };
+                if (ImGui::SliderFloat("Pos X", &pos[0], g.center.x - span, g.center.x + span, "%.2f") ||
+                    ImGui::SliderFloat("Pos Y", &pos[1], g.center.y - span, g.center.y + span, "%.2f") ||
+                    ImGui::SliderFloat("Pos Z", &pos[2], g.center.z - span, g.center.z + span, "%.2f")) {
+                    const float dx = pos[0] - g.center.x;
+                    const float dy = pos[1] - g.center.y;
+                    const float dz = pos[2] - g.center.z;
+                    float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    if (d < g.radius * 0.2f) {
+                        d = g.radius * 0.2f;
+                    }
+                    g.dist = d;
+                    g.lat = std::asin(std::max(-1.f, std::min(1.f, dy / d))) * 57.2957795f;
+                    g.lon = std::atan2(dx, dz) * 57.2957795f;
+                }
+                ImGui::Separator();
+                ImGui::SliderFloat("Look X", &g.center.x, g.center.x - span, g.center.x + span, "%.2f");
+                ImGui::SliderFloat("Look Y", &g.center.y, g.center.y - span, g.center.y + span, "%.2f");
+                ImGui::SliderFloat("Look Z", &g.center.z, g.center.z - span, g.center.z + span, "%.2f");
+                if (ImGui::Button("Restore original position")) {
+                    g.lat = g.orig_lat;
+                    g.lon = g.orig_lon;
+                    g.dist = g.orig_dist;
+                    g.center = g.orig_center;
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::CollapsingHeader("Meshes", ImGuiTreeNodeFlags_DefaultOpen)) {
+                bool vis_changed = false;
+                for (std::size_t i = 0; i < g.decoded.scene_ir.meshes.size(); ++i) {
+                    if (i >= g.mesh_visible.size()) {
+                        break;
+                    }
+                    bool vis = g.mesh_visible[i] != 0;
+                    const auto &mesh = g.decoded.scene_ir.meshes[i];
+                    if (ImGui::Checkbox(mesh.name.c_str(), &vis)) {
+                        g.mesh_visible[i] = vis ? 1 : 0;
+                        vis_changed = true;
+                    }
+                }
+                if (vis_changed) {
+                    build_draw_list();
+                }
+            }
+            if (ImGui::CollapsingHeader("Images")) {
+                for (std::size_t i = 0; i < g.gpu_images.size(); ++i) {
+                    if (!g.gpu_images[i].view.id) {
+                        continue;
+                    }
+                    const auto &img = g.decoded.scene_ir.images[i];
+                    ImGui::Text("%zu %s", i, img.name.c_str());
+                    ImGui::Image(ImTextureRef(simgui_imtextureid(g.gpu_images[i].view)), ImVec2(128, 128));
+                }
+            }
+        }
+    }
+    ImGui::End();
 }
 
 void init(void) {
@@ -264,12 +582,27 @@ void init(void) {
     sgdesc.environment = sglue_environment();
     sgdesc.logger.func = slog_func;
     sg_setup(&sgdesc);
+    stm_setup();
 
     sgl_desc_t sgldesc = {};
     sgldesc.max_vertices = 1 << 20;
     sgldesc.max_commands = 1 << 16;
     sgldesc.logger.func = slog_func;
     sgl_setup(&sgldesc);
+
+    sg_pipeline_desc pip_desc = {};
+    pip_desc.cull_mode = SG_CULLMODE_NONE;
+    pip_desc.face_winding = SG_FACEWINDING_CCW;
+    pip_desc.depth.write_enabled = true;
+    pip_desc.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
+    g.pip = sgl_make_pipeline(&pip_desc);
+
+    sappimgui_setup();
+    sgimgui_desc_t sgimgui_desc = {};
+    sgimgui_setup(&sgimgui_desc);
+    simgui_desc_t imdesc = {};
+    imdesc.logger.func = slog_func;
+    simgui_setup(&imdesc);
 
     g.pass_action = {};
     g.pass_action.colors[0].load_action = SG_LOADACTION_CLEAR;
@@ -302,39 +635,110 @@ void frame(void) {
 
     // simple look-at / perspective via sgl
     sgl_defaults();
+    if (g.pip.id) {
+        sgl_load_pipeline(g.pip);
+    }
     sgl_matrix_mode_projection();
     sgl_perspective(sgl_rad(50.f), aspect, g.radius * 0.01f, g.radius * 100.f);
     sgl_matrix_mode_modelview();
     sgl_lookat(eye.x, eye.y, eye.z, g.center.x, g.center.y, g.center.z, 0.f, 1.f, 0.f);
 
-    const Vec3 light = vec3_normalize(Vec3{0.35f, 0.85f, 0.4f});
+    const Vec3 light = light_dir_from_latlon(g.light_lat, g.light_lon);
 
+    auto emit_lit = [&](const TriVertex &v, bool textured) {
+        float ndl = 1.f;
+        float lr = 1.f, lg = 1.f, lb = 1.f;
+        if (g.light_enabled) {
+            ndl = v.nrm.x * light.x + v.nrm.y * light.y + v.nrm.z * light.z;
+            ndl = g.two_sided_light ? std::fabs(ndl) : ndl;
+            ndl = std::max(g.ambient, ndl) * g.light_intensity;
+            lr = g.light_color[0];
+            lg = g.light_color[1];
+            lb = g.light_color[2];
+        }
+        const float cr = v.r * ndl * lr, cg = v.g * ndl * lg, cb = v.b * ndl * lb;
+        if (textured) {
+            sgl_v3f_t2f_c3f(v.pos.x, v.pos.y, v.pos.z, v.u, v.v, cr, cg, cb);
+        } else {
+            sgl_v3f_c3f(v.pos.x, v.pos.y, v.pos.z, cr, cg, cb);
+        }
+    };
+
+    if (g.draw_enabled) {
+    sgl_disable_texture();
     sgl_begin_triangles();
     for (const auto &v : g.tris) {
-        float ndl = v.nrm.x * light.x + v.nrm.y * light.y + v.nrm.z * light.z;
-        ndl = std::max(0.15f, ndl);
-        sgl_c3f(v.r * ndl, v.g * ndl, v.b * ndl);
-        sgl_v3f(v.pos.x, v.pos.y, v.pos.z);
+        if (v.tex < 0 || !g.draw_textures) {
+            emit_lit(v, false);
+        }
     }
     sgl_end();
+
+    const int ntex = g.draw_textures ? static_cast<int>(g.gpu_images.size()) : 0;
+    for (int tex = 0; tex < ntex; ++tex) {
+        if (!g.gpu_images[static_cast<std::size_t>(tex)].view.id) {
+            continue;
+        }
+        bool any = false;
+        for (const auto &v : g.tris) {
+            if (v.tex == tex) {
+                any = true;
+                break;
+            }
+        }
+        if (!any) {
+            continue;
+        }
+        sgl_enable_texture();
+        sgl_texture(g.gpu_images[static_cast<std::size_t>(tex)].view, g.sampler);
+        sgl_begin_triangles();
+        for (const auto &v : g.tris) {
+            if (v.tex == tex) {
+                emit_lit(v, true);
+            }
+        }
+        sgl_end();
+    }
+    sgl_disable_texture();
+    }
+    draw_light_debug();
+
+    simgui_frame_desc_t fd = {};
+    fd.width = sapp_width();
+    fd.height = sapp_height();
+    fd.delta_time = sapp_frame_duration();
+    fd.dpi_scale = sapp_dpi_scale();
+    simgui_new_frame(&fd);
+    draw_ui();
 
     sg_pass pass = {};
     pass.action = g.pass_action;
     pass.swapchain = sglue_swapchain();
     sg_begin_pass(&pass);
     sgl_draw();
+    simgui_render();
     sg_end_pass();
     sg_commit();
-
-    (void)g.status; // status available for future debugtext
 }
 
 void cleanup(void) {
+    destroy_gpu_images();
+    if (g.pip.id) {
+        sgl_destroy_pipeline(g.pip);
+        g.pip = {};
+    }
+    sappimgui_shutdown();
+    sgimgui_shutdown();
+    simgui_shutdown();
     sgl_shutdown();
     sg_shutdown();
 }
 
 void event(const sapp_event *ev) {
+    sappimgui_track_event(ev);
+    if (simgui_handle_event(ev)) {
+        return;
+    }
     switch (ev->type) {
     case SAPP_EVENTTYPE_KEY_DOWN:
         if (ev->key_code == SAPP_KEYCODE_ESCAPE) {

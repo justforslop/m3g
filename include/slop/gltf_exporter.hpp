@@ -11,8 +11,10 @@ namespace exp {
 
 class GltfExporter {
 public:
-    GltfPaths write(const decode::Decoded &decoded, const std::string &output_path, bool overwrite) const;
-    GltfPaths write(const scene::SceneIr &scene_ir, const std::string &output_path, bool overwrite) const;
+    GltfPaths write(const decode::Decoded &decoded, const std::string &output_path, bool overwrite,
+                    int png_compression_level = 8) const;
+    GltfPaths write(const scene::SceneIr &scene_ir, const std::string &output_path, bool overwrite,
+                    int png_compression_level = 8) const;
 };
 
 } // namespace exp

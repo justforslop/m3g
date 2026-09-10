@@ -15,3 +15,8 @@ references/
 
 # auto generated
 .ccls-cache
+
+# Others
+/*.glb
+/*.bin
+/*.gltf

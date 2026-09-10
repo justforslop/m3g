@@ -6,6 +6,10 @@
 #include <stdexcept>
 #include <vector>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace slop {
 namespace scene {
 
@@ -81,6 +85,94 @@ inline std::vector<float> node_matrix_row_major(const m3g::NodeMeta &node_meta) 
         return component_transform_to_row_major(*node_meta.transformable.component_transform);
     }
     return identity_matrix_row_major();
+}
+
+struct DecomposedTrs {
+    std::vector<float> translation{0.f, 0.f, 0.f};
+    std::vector<float> rotation{0.f, 0.f, 0.f, 1.f}; // xyzw
+    std::vector<float> scale{1.f, 1.f, 1.f};
+};
+
+inline float vec3_length(float x, float y, float z) { return std::sqrt(x * x + y * y + z * z); }
+
+inline std::vector<float> quaternion_from_axis_angle_degrees(float angle_degrees, float ax, float ay, float az) {
+    const float len = vec3_length(ax, ay, az);
+    if (len < 1e-8f || std::abs(angle_degrees) < 1e-8f) {
+        return {0.f, 0.f, 0.f, 1.f};
+    }
+    const float half = (angle_degrees * static_cast<float>(M_PI) / 180.f) * 0.5f;
+    const float s = std::sin(half);
+    const float c = std::cos(half);
+    return {ax / len * s, ay / len * s, az / len * s, c};
+}
+
+inline std::vector<float> quaternion_from_row_major_rotation(const float r[3][3]) {
+    const float trace = r[0][0] + r[1][1] + r[2][2];
+    float x, y, z, w;
+    if (trace > 0.f) {
+        const float s = std::sqrt(trace + 1.f) * 2.f;
+        w = 0.25f * s;
+        x = (r[2][1] - r[1][2]) / s;
+        y = (r[0][2] - r[2][0]) / s;
+        z = (r[1][0] - r[0][1]) / s;
+    } else if (r[0][0] > r[1][1] && r[0][0] > r[2][2]) {
+        const float s = std::sqrt(1.f + r[0][0] - r[1][1] - r[2][2]) * 2.f;
+        w = (r[2][1] - r[1][2]) / s;
+        x = 0.25f * s;
+        y = (r[0][1] + r[1][0]) / s;
+        z = (r[0][2] + r[2][0]) / s;
+    } else if (r[1][1] > r[2][2]) {
+        const float s = std::sqrt(1.f + r[1][1] - r[0][0] - r[2][2]) * 2.f;
+        w = (r[0][2] - r[2][0]) / s;
+        x = (r[0][1] + r[1][0]) / s;
+        y = 0.25f * s;
+        z = (r[1][2] + r[2][1]) / s;
+    } else {
+        const float s = std::sqrt(1.f + r[2][2] - r[0][0] - r[1][1]) * 2.f;
+        w = (r[1][0] - r[0][1]) / s;
+        x = (r[0][2] + r[2][0]) / s;
+        y = (r[1][2] + r[2][1]) / s;
+        z = 0.25f * s;
+    }
+    const float qlen = std::sqrt(x * x + y * y + z * z + w * w);
+    if (qlen < 1e-8f) {
+        return {0.f, 0.f, 0.f, 1.f};
+    }
+    return {x / qlen, y / qlen, z / qlen, w / qlen};
+}
+
+inline DecomposedTrs decompose_row_major_trs(const std::vector<float> &matrix) {
+    DecomposedTrs out;
+    if (matrix.size() != 16) {
+        return out;
+    }
+    out.translation = {matrix[3], matrix[7], matrix[11]};
+    float sx = vec3_length(matrix[0], matrix[4], matrix[8]);
+    float sy = vec3_length(matrix[1], matrix[5], matrix[9]);
+    float sz = vec3_length(matrix[2], matrix[6], matrix[10]);
+    const float det = matrix[0] * (matrix[5] * matrix[10] - matrix[6] * matrix[9]) -
+                      matrix[1] * (matrix[4] * matrix[10] - matrix[6] * matrix[8]) +
+                      matrix[2] * (matrix[4] * matrix[9] - matrix[5] * matrix[8]);
+    if (det < 0.f) {
+        sx = -sx;
+    }
+    if (sx == 0.f) {
+        sx = 1e-8f;
+    }
+    if (sy == 0.f) {
+        sy = 1e-8f;
+    }
+    if (sz == 0.f) {
+        sz = 1e-8f;
+    }
+    out.scale = {sx, sy, sz};
+    float r[3][3] = {
+        {matrix[0] / sx, matrix[1] / sy, matrix[2] / sz},
+        {matrix[4] / sx, matrix[5] / sy, matrix[6] / sz},
+        {matrix[8] / sx, matrix[9] / sy, matrix[10] / sz},
+    };
+    out.rotation = quaternion_from_row_major_rotation(r);
+    return out;
 }
 
 inline std::vector<double> row_major_to_column_major_list(const std::vector<float> &matrix) {

@@ -1,24 +1,38 @@
 # slop — M3G decoder / glTF converter (C++17)
 #
 # Build:
-#   make            # M3G viewer -> build/debug/slop-view  (sokol)
+#   make            # viewer -> build/debug  (sokol)
+#   make debug      # same
 #   make view       # same as make debug
-#   make release    # CLI binary -> build/release/slop
+#   make release    # CLI    -> build/slop
 #   make clean
 #
 # Viewer:
-#   ./build/debug/slop-view assets/90.m3g
+#   ./build/debug assets/90.m3g
+#
+# Object files live under build/obj/<config>/ so build/debug can be the binary.
 #
 # CMake (LSP compile_commands, optional ctest):
 #   cmake -S . -B build && cmake --build build
 #
 # Vendored headers:
 #   make setup
+.PHONY: all debug release view clean setup setup-libs setup-cgltf setup-cjson setup-stb setup-sokol setup-miniz setup-imgui test
 
-.PHONY: all debug release view clean setup setup-libs setup-cgltf setup-cjson setup-stb setup-sokol test
+MINIZ_TAG := 3.1.2
+MINIZ_URL := https://github.com/richgel999/miniz/releases/download/$(MINIZ_TAG)/miniz-$(MINIZ_TAG).zip
+
+MINIZ_ARCHIVE := build/miniz-$(MINIZ_TAG).zip
+MINIZ_DIR := vendors/miniz
+MINIZ_STAMP := $(MINIZ_DIR)/.extracted
+
+IMGUI_TAG := 1.92.9b
+IMGUI_URL := https://github.com/ocornut/imgui/archive/refs/tags/v$(IMGUI_TAG).zip
+IMGUI_ARCHIVE := build/imgui-$(IMGUI_TAG).zip
+IMGUI_DIR := vendors/imgui
+IMGUI_STAMP := $(IMGUI_DIR)/.extracted
 
 APP      := slop
-VIEW_APP := slop-view
 BUILDROOT := build
 SRCDIR   := src
 INCDIR   := include
@@ -27,7 +41,8 @@ TEST_BINDIR := tests/bin
 CXX      ?= c++
 CC       ?= gcc
 BUILD    ?= debug
-BUILDDIR := $(BUILDROOT)/$(BUILD)
+# Objects must not use build/debug/ — that path is the viewer executable.
+OBJDIR   := $(BUILDROOT)/obj/$(BUILD)
 
 APP_CXXFLAGS_debug   := -std=c++17 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE -DAPP_NAME=\"$(APP)\"
 APP_CXXFLAGS_release := -std=c++17 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE -DAPP_NAME=\"$(APP)\"
@@ -35,65 +50,70 @@ APP_CFLAGS_debug     := -std=c99 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE
 APP_CFLAGS_release   := -std=c99 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE
 APP_CXXFLAGS         := $(APP_CXXFLAGS_$(BUILD))
 APP_CFLAGS           := $(APP_CFLAGS_$(BUILD))
-APP_CPPFLAGS         := -I. -I$(INCDIR) -I$(SRCDIR) -Ivendors -Ivendors/libs
+APP_CPPFLAGS         := -I. -I$(INCDIR) -I$(SRCDIR) -Ivendors -Ivendors/libs -Ivendors/miniz
+VIEW_CPPFLAGS        := $(APP_CPPFLAGS) -Ivendors/imgui
 APP_LDFLAGS          :=
-APP_LIBS             := -lz -lm
+APP_LIBS             := -lm
 VIEW_LIBS            := $(APP_LIBS) -lGL -lX11 -lXi -lXcursor -ldl -lpthread
 
 CXX_SRCS := $(shell find $(SRCDIR) -name '*.cpp' 2>/dev/null)
 # Exclude sokol viewer from the CLI app.
 C_SRCS   := $(filter-out $(SRCDIR)/debug.c,$(shell find $(SRCDIR) -name '*.c' 2>/dev/null))
-VENDOR_C_SRCS := vendors/cjson/cJSON.c
-CXX_OBJS := $(patsubst $(SRCDIR)/%.cpp,$(BUILDDIR)/%.o,$(CXX_SRCS))
-C_OBJS   := $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/%.o,$(C_SRCS))
-VENDOR_C_OBJS := $(patsubst vendors/%.c,$(BUILDDIR)/vendors/%.o,$(VENDOR_C_SRCS))
+VENDOR_C_SRCS := vendors/cjson/cJSON.c vendors/miniz/miniz.c
+CXX_OBJS := $(patsubst $(SRCDIR)/%.cpp,$(OBJDIR)/%.o,$(CXX_SRCS))
+C_OBJS   := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(C_SRCS))
+VENDOR_C_OBJS := $(patsubst vendors/%.c,$(OBJDIR)/vendors/%.o,$(VENDOR_C_SRCS))
 OBJS := $(CXX_OBJS) $(C_OBJS) $(VENDOR_C_OBJS)
-BIN  := $(BUILDDIR)/$(APP)
-VIEW_BIN := $(BUILDDIR)/$(VIEW_APP)
-VIEW_LIB_OBJS := $(filter-out $(BUILDDIR)/main.o,$(OBJS))
-VIEW_DEBUG_OBJ := $(BUILDDIR)/debug_view.o
+BIN  := $(BUILDROOT)/$(APP)
+DEBUG_BIN := $(BUILDROOT)/debug
+VIEW_LIB_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
+VIEW_DEBUG_OBJ := $(OBJDIR)/debug_view.o
+IMGUI_SRCS := vendors/imgui/imgui.cpp vendors/imgui/imgui_draw.cpp vendors/imgui/imgui_tables.cpp vendors/imgui/imgui_widgets.cpp
+IMGUI_OBJS := $(patsubst vendors/imgui/%.cpp,$(OBJDIR)/imgui/%.o,$(IMGUI_SRCS))
 
 all: debug
 
-debug:
-	@$(MAKE) --no-print-directory BUILD=debug $(VIEW_BIN)
+debug view:
+	@$(MAKE) --no-print-directory BUILD=debug $(DEBUG_BIN)
 
 release:
-	@$(MAKE) --no-print-directory BUILD=release $(BUILDROOT)/release/$(APP)
+	@$(MAKE) --no-print-directory BUILD=release $(BIN)
 
-view:
-	@$(MAKE) --no-print-directory BUILD=debug $(VIEW_BIN)
-
-$(BIN): $(OBJS) | $(BUILDDIR)
+$(BIN): $(OBJS) | $(BUILDROOT)
 	@echo "LD  $@"
 	$(CXX) $(APP_CXXFLAGS) -o $@ $(OBJS) $(APP_LDFLAGS) $(APP_LIBS)
 
-$(VIEW_BIN): $(VIEW_LIB_OBJS) $(VIEW_DEBUG_OBJ) | $(BUILDDIR)
+$(DEBUG_BIN): $(VIEW_LIB_OBJS) $(VIEW_DEBUG_OBJ) $(IMGUI_OBJS) | $(BUILDROOT)
 	@echo "LD  $@"
-	$(CXX) $(APP_CXXFLAGS) -o $@ $(VIEW_LIB_OBJS) $(VIEW_DEBUG_OBJ) $(APP_LDFLAGS) $(VIEW_LIBS)
+	$(CXX) $(APP_CXXFLAGS) -o $@ $(VIEW_LIB_OBJS) $(VIEW_DEBUG_OBJ) $(IMGUI_OBJS) $(APP_LDFLAGS) $(VIEW_LIBS)
 
-# debug.c is C++ (uses slop decode API + sokol).
+# debug.c is C++ (uses slop decode API + sokol + imgui).
 $(VIEW_DEBUG_OBJ): $(SRCDIR)/debug.c
 	@mkdir -p $(dir $@)
 	@echo "CXX $<  (viewer)"
-	$(CXX) $(APP_CXXFLAGS) $(APP_CPPFLAGS) -x c++ -c -o $@ $<
+	$(CXX) $(APP_CXXFLAGS) $(VIEW_CPPFLAGS) -x c++ -c -o $@ $<
 
-$(BUILDDIR)/%.o: $(SRCDIR)/%.cpp
+$(OBJDIR)/imgui/%.o: vendors/imgui/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX $<"
+	$(CXX) $(APP_CXXFLAGS) $(VIEW_CPPFLAGS) -c -o $@ $<
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(dir $@)
 	@echo "CXX $<"
 	$(CXX) $(APP_CXXFLAGS) $(APP_CPPFLAGS) -c -o $@ $<
 
-$(BUILDDIR)/%.o: $(SRCDIR)/%.c
+$(OBJDIR)/%.o: $(SRCDIR)/%.c
 	@mkdir -p $(dir $@)
 	@echo "CC  $<"
 	$(CC) $(APP_CFLAGS) $(APP_CPPFLAGS) -c -o $@ $<
 
-$(BUILDDIR)/vendors/%.o: vendors/%.c
+$(OBJDIR)/vendors/%.o: vendors/%.c
 	@mkdir -p $(dir $@)
 	@echo "CC  $<"
 	$(CC) $(APP_CFLAGS) $(APP_CPPFLAGS) -c -o $@ $<
 
-$(BUILDDIR) $(TEST_BINDIR):
+$(BUILDROOT) $(OBJDIR) $(TEST_BINDIR):
 	@mkdir -p $@
 
 clean:
@@ -101,7 +121,7 @@ clean:
 
 CURL := curl -fsSL -o
 
-setup: setup-cgltf setup-cjson setup-stb setup-sokol setup-libs
+setup: setup-cgltf setup-cjson setup-stb setup-sokol setup-libs setup-miniz setup-imgui
 
 setup-libs:
 	@mkdir -p vendors/libs
@@ -163,6 +183,38 @@ setup-sokol:
 		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_gl.h
 	$(CURL) vendors/sokol/util/sokol_fontstash.h \
 		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_fontstash.h
+	$(CURL) vendors/sokol/util/sokol_imgui.h \
+		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_imgui.h
+	$(CURL) vendors/sokol/util/sokol_gfx_imgui.h \
+		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_gfx_imgui.h
+	$(CURL) vendors/sokol/util/sokol_app_imgui.h \
+		https://raw.githubusercontent.com/floooh/sokol/refs/heads/master/util/sokol_app_imgui.h
+
+setup-miniz: $(MINIZ_STAMP)
+
+$(MINIZ_ARCHIVE):
+	@mkdir -p $(dir $@)
+	@curl -L --fail --output $@ $(MINIZ_URL)
+
+$(MINIZ_STAMP): $(MINIZ_ARCHIVE)
+	@rm -rf $(MINIZ_DIR)
+	@mkdir -p $(MINIZ_DIR)
+	@7z x $< -o$(MINIZ_DIR) -y
+	@touch $@
+
+setup-imgui: $(IMGUI_STAMP)
+
+$(IMGUI_ARCHIVE):
+	@mkdir -p $(dir $@)
+	@curl -L --fail --output $@ $(IMGUI_URL)
+
+$(IMGUI_STAMP): $(IMGUI_ARCHIVE)
+	@rm -rf $(IMGUI_DIR)
+	@mkdir -p $(IMGUI_DIR)
+	@7z x $< -o$(IMGUI_DIR) -y
+	@mv $(IMGUI_DIR)/imgui-$(IMGUI_TAG)/* $(IMGUI_DIR)/
+	@rm -rf $(IMGUI_DIR)/imgui-$(IMGUI_TAG)
+	@touch $@
 
 # Run tests under tests/NNN-*.c or tests/NNN_*.c (gcc + Make; no CMake)
 n ?=

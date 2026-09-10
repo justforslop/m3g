@@ -10,6 +10,10 @@
 #include <stdexcept>
 #include <tuple>
 
+#define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+#include "miniz.h"
+#include "stb/stb_image.h"
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -76,6 +80,8 @@ public:
         scene.images = images_;
         scene.samplers = samplers_;
         scene.cameras = cameras_;
+        build_animations();
+        scene.animations = animations_;
         for (const auto &kv : warnings_) {
             scene.warnings.push_back(kv.second);
         }
@@ -94,6 +100,7 @@ private:
     std::vector<SceneImageIr> images_;
     std::vector<SceneSamplerIr> samplers_;
     std::vector<SceneCameraIr> cameras_;
+    std::vector<SceneAnimationIr> animations_;
 
     std::map<int, int> node_index_by_object_id_;
     std::map<int, int> mesh_index_by_object_id_;
@@ -144,9 +151,7 @@ private:
                 }
             }
         }
-        if (has_anim) {
-            warn("animation", "Animation data is present but v1 exports static transforms and meshes only.");
-        }
+        (void)has_anim;
         if (has_morph) {
             warn("morphing", "MorphingMesh objects are not supported in v1 and will be skipped.");
         }
@@ -338,6 +343,245 @@ private:
         nodes_.push_back(std::move(scene_node));
         node_index_by_object_id_[object_id] = index;
         return index;
+    }
+
+    void ensure_node_trs(int node_index) {
+        auto &node = nodes_[static_cast<std::size_t>(node_index)];
+        if (node.translation) {
+            return;
+        }
+        const std::vector<float> matrix =
+            node.matrix ? *node.matrix : identity_matrix_row_major();
+        const auto trs = decompose_row_major_trs(matrix);
+        node.translation = trs.translation;
+        node.rotation = trs.rotation;
+        node.scale = trs.scale;
+        node.matrix.reset();
+    }
+
+    static const char *interpolation_name(int interpolation) {
+        if (interpolation == m3g::KeyframeInterpolation::STEP) {
+            return "STEP";
+        }
+        return "LINEAR";
+    }
+
+    static float sequence_time_to_seconds(int sequence_time, const m3g::AnimationControllerObject *controller) {
+        float world = static_cast<float>(sequence_time);
+        if (controller && std::abs(controller->speed) > 1e-8f) {
+            world = (static_cast<float>(sequence_time) - controller->reference_sequence_time) / controller->speed +
+                    static_cast<float>(controller->reference_world_time);
+        }
+        return world / 1000.f;
+    }
+
+    static void align_quaternions(std::vector<float> &values) {
+        for (std::size_t i = 4; i + 3 < values.size(); i += 4) {
+            const float dot = values[i - 4] * values[i] + values[i - 3] * values[i + 1] +
+                              values[i - 2] * values[i + 2] + values[i - 1] * values[i + 3];
+            if (dot < 0.f) {
+                values[i] = -values[i];
+                values[i + 1] = -values[i + 1];
+                values[i + 2] = -values[i + 2];
+                values[i + 3] = -values[i + 3];
+            }
+        }
+    }
+
+    bool convert_keyframes(const m3g::KeyframeSequenceObject &seq, const m3g::AnimationControllerObject *controller,
+                           int property_id, SceneAnimationSamplerIr &out) {
+        if (seq.keyframes.empty()) {
+            return false;
+        }
+        int first = seq.valid_range_first;
+        int last = seq.valid_range_last;
+        if (last < 0 || first < 0) {
+            first = 0;
+            last = static_cast<int>(seq.keyframes.size()) - 1;
+        }
+        first = std::max(0, first);
+        last = std::min(last, static_cast<int>(seq.keyframes.size()) - 1);
+        if (last < first) {
+            return false;
+        }
+
+        const char *path = nullptr;
+        int comps = 0;
+        if (property_id == m3g::AnimationProperty::TRANSLATION) {
+            path = "translation";
+            comps = 3;
+        } else if (property_id == m3g::AnimationProperty::SCALE) {
+            path = "scale";
+            comps = seq.component_count == 1 ? 1 : 3;
+        } else if (property_id == m3g::AnimationProperty::ORIENTATION) {
+            path = "rotation";
+            comps = 4;
+        } else {
+            return false;
+        }
+        if (seq.component_count < comps && property_id != m3g::AnimationProperty::SCALE) {
+            return false;
+        }
+        if (property_id == m3g::AnimationProperty::SCALE && seq.component_count != 1 && seq.component_count < 3) {
+            return false;
+        }
+
+        out.interpolation = interpolation_name(seq.interpolation);
+        if (seq.interpolation == m3g::KeyframeInterpolation::SPLINE ||
+            seq.interpolation == m3g::KeyframeInterpolation::SQUAD) {
+            warn("animation-interp",
+                 "Spline/squad keyframe interpolation is exported as LINEAR.");
+        }
+        out.component_count = property_id == m3g::AnimationProperty::ORIENTATION
+                                  ? 4
+                                  : (property_id == m3g::AnimationProperty::SCALE ? 3 : 3);
+        (void)path;
+
+        struct Sample {
+            float time;
+            std::vector<float> value;
+        };
+        std::vector<Sample> samples;
+        samples.reserve(static_cast<std::size_t>(last - first + 1));
+        for (int i = first; i <= last; ++i) {
+            const auto &kf = seq.keyframes[static_cast<std::size_t>(i)];
+            Sample sample;
+            sample.time = sequence_time_to_seconds(kf.time, controller);
+            if (property_id == m3g::AnimationProperty::TRANSLATION) {
+                sample.value = {kf.values.size() > 0 ? kf.values[0] : 0.f,
+                                kf.values.size() > 1 ? kf.values[1] : 0.f,
+                                kf.values.size() > 2 ? kf.values[2] : 0.f};
+            } else if (property_id == m3g::AnimationProperty::SCALE) {
+                if (seq.component_count == 1) {
+                    const float s = kf.values.empty() ? 1.f : kf.values[0];
+                    sample.value = {s, s, s};
+                } else {
+                    sample.value = {kf.values.size() > 0 ? kf.values[0] : 1.f,
+                                    kf.values.size() > 1 ? kf.values[1] : 1.f,
+                                    kf.values.size() > 2 ? kf.values[2] : 1.f};
+                }
+            } else {
+                const float angle = kf.values.size() > 0 ? kf.values[0] : 0.f;
+                const float ax = kf.values.size() > 1 ? kf.values[1] : 0.f;
+                const float ay = kf.values.size() > 2 ? kf.values[2] : 0.f;
+                const float az = kf.values.size() > 3 ? kf.values[3] : 1.f;
+                sample.value = quaternion_from_axis_angle_degrees(angle, ax, ay, az);
+            }
+            samples.push_back(std::move(sample));
+        }
+        std::sort(samples.begin(), samples.end(),
+                  [](const Sample &a, const Sample &b) { return a.time < b.time; });
+
+        out.times.clear();
+        out.values.clear();
+        for (const auto &sample : samples) {
+            out.times.push_back(sample.time);
+            out.values.insert(out.values.end(), sample.value.begin(), sample.value.end());
+        }
+        if (property_id == m3g::AnimationProperty::ORIENTATION) {
+            align_quaternions(out.values);
+        }
+        return !out.times.empty();
+    }
+
+    void build_animations() {
+        struct PendingChannel {
+            int controller_id;
+            int node_index;
+            std::string path;
+            SceneAnimationSamplerIr sampler;
+        };
+        std::vector<PendingChannel> pending;
+        bool any_track = false;
+
+        for (const auto &kv : node_index_by_object_id_) {
+            const int object_id = kv.first;
+            const int node_index = kv.second;
+            auto found = file_.objects_by_id.find(object_id);
+            if (found == file_.objects_by_id.end()) {
+                continue;
+            }
+            auto node = std::dynamic_pointer_cast<m3g::NodeObject>(found->second);
+            if (!node) {
+                continue;
+            }
+            for (int track_id : node->node_meta.transformable.object3d.animation_track_ids) {
+                any_track = true;
+                auto track = std::dynamic_pointer_cast<m3g::AnimationTrackObject>(file_.object_or_null(track_id));
+                if (!track) {
+                    warn("animation-track", "Animation track reference is missing or invalid.");
+                    continue;
+                }
+                auto seq = std::dynamic_pointer_cast<m3g::KeyframeSequenceObject>(
+                    file_.object_or_null(track->keyframe_sequence_id));
+                if (!seq) {
+                    warn("animation-sequence", "Animation track is missing a KeyframeSequence.");
+                    continue;
+                }
+                const char *path = nullptr;
+                if (track->property_id == m3g::AnimationProperty::TRANSLATION) {
+                    path = "translation";
+                } else if (track->property_id == m3g::AnimationProperty::SCALE) {
+                    path = "scale";
+                } else if (track->property_id == m3g::AnimationProperty::ORIENTATION) {
+                    path = "rotation";
+                } else {
+                    warn("animation-property",
+                         "Animation property " + std::to_string(track->property_id) +
+                             " is not exported (only translation, orientation, and scale)." );
+                    continue;
+                }
+                const m3g::AnimationControllerObject *controller = nullptr;
+                int controller_id = -1;
+                if (track->animation_controller_id) {
+                    controller_id = *track->animation_controller_id;
+                    if (auto c = std::dynamic_pointer_cast<m3g::AnimationControllerObject>(
+                            file_.object_or_null(track->animation_controller_id))) {
+                        controller = c.get();
+                    }
+                }
+                SceneAnimationSamplerIr sampler;
+                if (!convert_keyframes(*seq, controller, track->property_id, sampler)) {
+                    warn("animation-empty", "Animation track has no usable keyframes.");
+                    continue;
+                }
+                PendingChannel channel;
+                channel.controller_id = controller_id;
+                channel.node_index = node_index;
+                channel.path = path;
+                channel.sampler = std::move(sampler);
+                pending.push_back(std::move(channel));
+            }
+        }
+
+        if (pending.empty()) {
+            if (any_track) {
+                warn("animation", "Animation tracks were present but none could be exported as node TRS.");
+            }
+            return;
+        }
+
+        std::map<int, SceneAnimationIr> by_controller;
+        for (auto &channel : pending) {
+            ensure_node_trs(channel.node_index);
+            auto &anim = by_controller[channel.controller_id];
+            if (anim.name.empty()) {
+                if (channel.controller_id >= 0) {
+                    anim.name = "Animation_" + std::to_string(channel.controller_id);
+                } else {
+                    anim.name = "Animation";
+                }
+            }
+            SceneAnimationChannelIr ch;
+            ch.sampler_index = static_cast<int>(anim.samplers.size());
+            ch.node_index = channel.node_index;
+            ch.path = channel.path;
+            anim.samplers.push_back(std::move(channel.sampler));
+            anim.channels.push_back(std::move(ch));
+        }
+        for (auto &kv : by_controller) {
+            animations_.push_back(std::move(kv.second));
+        }
     }
 
     std::optional<int> build_camera(m3g::CameraObject &camera_object) {
@@ -579,9 +823,15 @@ private:
                 scene_image.name = synthetic_name(*image);
                 EmbeddedRgbaImageSource src;
                 src.object_id = image->object_id;
+                src.pixels = std::move(*rgba);
                 src.width = image->width;
                 src.height = image->height;
-                src.pixels = std::move(*rgba);
+                if (src.width > 0 && src.pixels.size() % 4u == 0) {
+                    const int count = static_cast<int>(src.pixels.size() / 4u);
+                    if (count != src.width * src.height && count % src.width == 0) {
+                        src.height = count / src.width;
+                    }
+                }
                 scene_image.embedded = std::move(src);
                 ok = true;
             }
@@ -664,23 +914,123 @@ private:
         }
     }
 
+    static bool looks_like_zlib(const std::vector<std::uint8_t> &bytes) {
+        if (bytes.size() < 2) {
+            return false;
+        }
+        return bytes[0] == 0x78 &&
+               (bytes[1] == 0x01 || bytes[1] == 0x5e || bytes[1] == 0x9c || bytes[1] == 0xda);
+    }
+
+    static bool looks_like_png_or_jpeg(const std::vector<std::uint8_t> &bytes) {
+        if (bytes.size() >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4e && bytes[3] == 0x47) {
+            return true;
+        }
+        if (bytes.size() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff) {
+            return true;
+        }
+        return false;
+    }
+
+    static std::optional<std::vector<std::uint8_t>> inflate_with_miniz(const std::vector<std::uint8_t> &src,
+                                                                      std::size_t expected) {
+        if (src.empty()) {
+            return std::nullopt;
+        }
+        if (expected > 0) {
+            std::vector<std::uint8_t> dest(expected);
+            mz_ulong dest_len = static_cast<mz_ulong>(expected);
+            if (mz_uncompress(dest.data(), &dest_len, src.data(), static_cast<mz_ulong>(src.size())) == MZ_OK &&
+                dest_len == static_cast<mz_ulong>(expected)) {
+                dest.resize(static_cast<std::size_t>(dest_len));
+                return dest;
+            }
+        }
+        size_t out_len = 0;
+        void *out = tinfl_decompress_mem_to_heap(src.data(), src.size(), &out_len, TINFL_FLAG_PARSE_ZLIB_HEADER);
+        if (!out) {
+            out = tinfl_decompress_mem_to_heap(src.data(), src.size(), &out_len, 0);
+        }
+        if (!out) {
+            return std::nullopt;
+        }
+        std::vector<std::uint8_t> dest(static_cast<const std::uint8_t *>(out),
+                                       static_cast<const std::uint8_t *>(out) + out_len);
+        mz_free(out);
+        if (expected > 0 && dest.size() != expected) {
+            return std::nullopt;
+        }
+        return dest;
+    }
+
+    static std::optional<std::vector<std::uint8_t>> decode_png_jpeg_to_rgba(const std::vector<std::uint8_t> &src,
+                                                                           int *out_w, int *out_h) {
+        int w = 0, h = 0, n = 0;
+        unsigned char *data =
+            stbi_load_from_memory(src.data(), static_cast<int>(src.size()), &w, &h, &n, 4);
+        if (!data || w <= 0 || h <= 0) {
+            if (data) {
+                stbi_image_free(data);
+            }
+            return std::nullopt;
+        }
+        std::vector<std::uint8_t> rgba(data, data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4u);
+        stbi_image_free(data);
+        if (out_w) {
+            *out_w = w;
+        }
+        if (out_h) {
+            *out_h = h;
+        }
+        return rgba;
+    }
+
     std::optional<std::vector<std::uint8_t>> decode_embedded_image_to_rgba(const m3g::Image2DObject &image) {
         if (!image.pixels) {
             return std::nullopt;
         }
+        const std::vector<std::uint8_t> *pixels_ptr = &*image.pixels;
+        std::vector<std::uint8_t> inflated;
+
+        if (looks_like_png_or_jpeg(*image.pixels)) {
+            int w = 0, h = 0;
+            auto decoded = decode_png_jpeg_to_rgba(*image.pixels, &w, &h);
+            if (decoded) {
+                return decoded;
+            }
+        }
+
         auto entry_size = component_count_for_image_format(image.format);
         if (!entry_size) {
             return std::nullopt;
         }
         const int pixel_count = image.width * image.height;
+        const int expected =
+            image.palette.empty() ? pixel_count * *entry_size : pixel_count;
+
+        if (static_cast<int>(image.pixels->size()) != expected || looks_like_zlib(*image.pixels)) {
+            auto maybe = inflate_with_miniz(*image.pixels, static_cast<std::size_t>(expected));
+            if (maybe) {
+                inflated = std::move(*maybe);
+                pixels_ptr = &inflated;
+            } else if (static_cast<int>(image.pixels->size()) != expected) {
+                int w = 0, h = 0;
+                auto decoded = decode_png_jpeg_to_rgba(*image.pixels, &w, &h);
+                if (decoded) {
+                    return decoded;
+                }
+                return std::nullopt;
+            }
+        }
+
+        const auto &pixels = *pixels_ptr;
         std::vector<std::uint8_t> rgba(static_cast<std::size_t>(pixel_count) * 4u);
-        const auto &pixels = *image.pixels;
         if (!image.palette.empty()) {
             if (static_cast<int>(pixels.size()) != pixel_count) {
                 throw std::runtime_error("Palettized image size mismatch");
             }
             for (int pixel_index = 0; pixel_index < pixel_count; ++pixel_index) {
-                const int palette_index = pixels[static_cast<std::size_t>(pixel_index)];
+                const int palette_index = pixels[static_cast<std::size_t>(pixel_index)] & 0xFF;
                 const int palette_offset = palette_index * *entry_size;
                 if (palette_offset + *entry_size > static_cast<int>(image.palette.size())) {
                     throw std::runtime_error("Palette index out of range");
@@ -764,7 +1114,9 @@ private:
             const float u = array.components[static_cast<std::size_t>(u_index)] * binding.scale + binding.bias[0];
             const float v = array.components[static_cast<std::size_t>(v_index)] * binding.scale + binding.bias[1];
             values[static_cast<std::size_t>(vertex_index * 2)] = u;
-            values[static_cast<std::size_t>(vertex_index * 2 + 1)] = 1.f - v;
+            // Leave V as stored in M3G. Blender's glTF importer already does V=1-V;
+            // flipping here makes every island need UV Mirror Y after import.
+            values[static_cast<std::size_t>(vertex_index * 2 + 1)] = v;
         }
         return values;
     }

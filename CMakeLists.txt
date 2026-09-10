@@ -37,8 +37,6 @@ endmacro()
 
 add_interface_lib(libs vendors/libs)
 
-find_package(ZLIB REQUIRED)
-
 file(GLOB_RECURSE SLOP_CXX_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
@@ -47,6 +45,7 @@ file(GLOB_RECURSE SLOP_C_SOURCES CONFIGURE_DEPENDS
 )
 set(SLOP_VENDOR_C_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/vendors/cjson/cJSON.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vendors/miniz/miniz.c"
 )
 if(SLOP_CXX_SOURCES STREQUAL "")
     message(FATAL_ERROR "No C++ sources found in src/")
@@ -59,6 +58,7 @@ target_include_directories(slop PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/vendors"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vendors/miniz"
 )
 if(UNIX)
     target_compile_definitions(slop PRIVATE _DEFAULT_SOURCE)
@@ -68,7 +68,6 @@ target_compile_definitions(slop PRIVATE $<$<CONFIG:Release>:NDEBUG> $<$<CONFIG:M
 
 target_link_libraries(slop PRIVATE
     libs
-    ZLIB::ZLIB
     m
 )
 

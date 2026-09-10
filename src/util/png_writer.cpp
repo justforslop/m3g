@@ -8,7 +8,8 @@
 namespace slop {
 namespace util {
 
-void PngWriter::write_rgba(const std::string &path, int width, int height, const std::vector<std::uint8_t> &pixels) {
+void PngWriter::write_rgba(const std::string &path, int width, int height, const std::vector<std::uint8_t> &pixels,
+                           int compression_level) {
     if (width <= 0 || height <= 0) {
         throw std::invalid_argument("PNG dimensions must be positive");
     }
@@ -23,7 +24,13 @@ void PngWriter::write_rgba(const std::string &path, int width, int height, const
         fs::create_directories(p.parent_path());
     }
 
-    // stbi_write_png stride = bytes per row
+    if (compression_level < 0) {
+        compression_level = 0;
+    }
+    if (compression_level > 9) {
+        compression_level = 9;
+    }
+    stbi_write_png_compression_level = compression_level;
     const int stride = width * 4;
     if (stbi_write_png(path.c_str(), width, height, 4, pixels.data(), stride) == 0) {
         throw std::runtime_error("stbi_write_png failed: " + path);

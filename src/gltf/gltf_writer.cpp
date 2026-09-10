@@ -5,6 +5,8 @@
 
 #include "cgltf/cgltf.h"
 #include "cjson/cJSON.h"
+#include "stb/stb_image.h"
+#include "stb/stb_image_write.h"
 
 #include <algorithm>
 #include <cctype>
@@ -62,6 +64,19 @@ public:
         }
         return {offset, static_cast<int>(values.size()) * 4};
     }
+
+    BufferSlice append_bytes(const std::uint8_t *data, std::size_t length) {
+        align(4);
+        const int offset = size();
+        out_.insert(out_.end(), data, data + length);
+        return {offset, static_cast<int>(length)};
+    }
+
+    BufferSlice append_bytes(const std::vector<std::uint8_t> &data) {
+        return append_bytes(data.data(), data.size());
+    }
+
+    void align_public(int alignment) { align(alignment); }
 
     const std::vector<std::uint8_t> &bytes() const { return out_; }
 
@@ -329,13 +344,124 @@ void validate_with_cgltf(const std::string &gltf_path) {
     }
 }
 
+std::string to_lower_ascii(std::string s) {
+    for (char &c : s) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+std::string extension_lower(const std::filesystem::path &path) {
+    return to_lower_ascii(path.extension().string());
+}
+
+std::vector<std::uint8_t> read_file_bytes(const std::filesystem::path &path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Failed to read file: " + path.string());
+    }
+    in.seekg(0, std::ios::end);
+    const auto len = in.tellg();
+    if (len < 0) {
+        throw std::runtime_error("Failed to size file: " + path.string());
+    }
+    in.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(len));
+    if (len > 0) {
+        in.read(reinterpret_cast<char *>(bytes.data()), len);
+        if (!in) {
+            throw std::runtime_error("Failed to read file contents: " + path.string());
+        }
+    }
+    return bytes;
+}
+
+void stbi_write_vec_callback(void *context, void *data, int size) {
+    auto *out = static_cast<std::vector<std::uint8_t> *>(context);
+    const auto *bytes = static_cast<const std::uint8_t *>(data);
+    out->insert(out->end(), bytes, bytes + size);
+}
+
+std::vector<std::uint8_t> encode_rgba_png(int width, int height, const std::vector<std::uint8_t> &pixels,
+                                         int compression_level) {
+    if (width <= 0 || height <= 0) {
+        throw std::invalid_argument("PNG dimensions must be positive");
+    }
+    const std::size_t expected = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u;
+    if (pixels.size() != expected) {
+        throw std::invalid_argument("Unexpected RGBA pixel buffer size for PNG");
+    }
+    if (compression_level < 0) {
+        compression_level = 0;
+    }
+    if (compression_level > 9) {
+        compression_level = 9;
+    }
+    stbi_write_png_compression_level = compression_level;
+    std::vector<std::uint8_t> bytes;
+    if (stbi_write_png_to_func(stbi_write_vec_callback, &bytes, width, height, 4, pixels.data(), width * 4) == 0 ||
+        bytes.empty()) {
+        throw std::runtime_error("stbi_write_png_to_func failed");
+    }
+    return bytes;
+}
+
+void write_u32_le(std::ostream &out, std::uint32_t value) {
+    const unsigned char bytes[4] = {
+        static_cast<unsigned char>(value & 0xFFu),
+        static_cast<unsigned char>((value >> 8) & 0xFFu),
+        static_cast<unsigned char>((value >> 16) & 0xFFu),
+        static_cast<unsigned char>((value >> 24) & 0xFFu),
+    };
+    out.write(reinterpret_cast<const char *>(bytes), 4);
+}
+
+void write_glb_file(const std::filesystem::path &path, const std::string &json,
+                    const std::vector<std::uint8_t> &bin) {
+    std::string json_chunk = json;
+    while (json_chunk.size() % 4 != 0) {
+        json_chunk.push_back(' ');
+    }
+    std::vector<std::uint8_t> bin_chunk = bin;
+    while (bin_chunk.size() % 4 != 0) {
+        bin_chunk.push_back(0);
+    }
+
+    const std::uint32_t json_len = static_cast<std::uint32_t>(json_chunk.size());
+    const std::uint32_t bin_len = static_cast<std::uint32_t>(bin_chunk.size());
+    const std::uint32_t total_len = 12u + 8u + json_len + 8u + bin_len;
+
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("Failed to write GLB: " + path.string());
+    }
+    write_u32_le(out, 0x46546C67u); // glTF
+    write_u32_le(out, 2u);
+    write_u32_le(out, total_len);
+    write_u32_le(out, json_len);
+    write_u32_le(out, 0x4E4F534Au); // JSON
+    out.write(json_chunk.data(), static_cast<std::streamsize>(json_chunk.size()));
+    write_u32_le(out, bin_len);
+    write_u32_le(out, 0x004E4942u); // BIN
+    if (!bin_chunk.empty()) {
+        out.write(reinterpret_cast<const char *>(bin_chunk.data()),
+                  static_cast<std::streamsize>(bin_chunk.size()));
+    }
+    if (!out) {
+        throw std::runtime_error("Failed while writing GLB: " + path.string());
+    }
+}
+
 } // namespace
 
-scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std::string &output_path, bool overwrite) {
+scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std::string &output_path, bool overwrite,
+                                         int png_compression_level) {
     namespace fs = std::filesystem;
     const fs::path normalized_output = fs::absolute(output_path).lexically_normal();
-    if (normalized_output.extension() != ".gltf") {
-        throw std::invalid_argument("Output path must end with .gltf: " + normalized_output.string());
+    const std::string ext = extension_lower(normalized_output);
+    const bool write_glb = ext == ".glb";
+    if (!write_glb && ext != ".gltf") {
+        throw std::invalid_argument("Output path must end with .gltf or .glb: " + normalized_output.string());
     }
     const fs::path output_dir = normalized_output.parent_path();
     if (output_dir.empty()) {
@@ -349,53 +475,17 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
         if (fs::exists(normalized_output)) {
             throw std::runtime_error("Output file already exists: " + normalized_output.string());
         }
-        if (fs::exists(bin_path)) {
-            throw std::runtime_error("Output binary already exists: " + bin_path.string());
-        }
-        if (!scene.images.empty() && fs::exists(images_dir)) {
-            throw std::runtime_error("Output image directory already exists: " + images_dir.string());
+        if (!write_glb) {
+            if (fs::exists(bin_path)) {
+                throw std::runtime_error("Output binary already exists: " + bin_path.string());
+            }
+            if (!scene.images.empty() && fs::exists(images_dir)) {
+                throw std::runtime_error("Output image directory already exists: " + images_dir.string());
+            }
         }
     }
 
     fs::create_directories(output_dir);
-
-    std::vector<std::string> image_uris;
-    std::vector<std::string> image_paths;
-    if (!scene.images.empty()) {
-        fs::create_directories(images_dir);
-        std::set<std::string> used_names;
-        for (const auto &image : scene.images) {
-            std::string file_name;
-            if (image.embedded) {
-                file_name = unique_file_name("image_" + std::to_string(image.embedded->object_id) + ".png", used_names);
-            } else if (image.external) {
-                file_name = unique_file_name(fs::path(image.external->source_path).filename().string(), used_names);
-            } else {
-                throw std::runtime_error("Image has no source");
-            }
-            const fs::path target = images_dir / file_name;
-            if (image.embedded) {
-                util::PngWriter::write_rgba(target.string(), image.embedded->width, image.embedded->height,
-                                            image.embedded->pixels);
-            } else {
-                const fs::path source_path = image.external->source_path;
-                if (!fs::exists(source_path)) {
-                    throw std::runtime_error("Missing external image: " + source_path.string());
-                }
-                std::string extension = source_path.extension().string();
-                for (char &c : extension) {
-                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                }
-                if (extension != ".png" && extension != ".jpg" && extension != ".jpeg") {
-                    throw std::runtime_error("Unsupported external image format");
-                }
-                fs::copy_file(source_path, target,
-                              overwrite ? fs::copy_options::overwrite_existing : fs::copy_options::none);
-            }
-            image_uris.push_back(images_dir.filename().string() + "/" + file_name);
-            image_paths.push_back(target.string());
-        }
-    }
 
     BinaryBufferBuilder buffer_builder;
     CJsonPtr root(require_json(cJSON_CreateObject(), "root"));
@@ -413,6 +503,115 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
         cJSON_AddItemToObject(mesh_json, "primitives", prims);
         cJSON_AddItemToArray(meshes_json, mesh_json);
     }
+
+    std::vector<std::string> image_uris;
+    std::vector<std::string> image_paths;
+    std::vector<int> image_buffer_views(scene.images.size(), -1);
+    std::vector<std::string> image_mime_types(scene.images.size());
+
+    if (!scene.images.empty()) {
+        if (write_glb) {
+            for (std::size_t i = 0; i < scene.images.size(); ++i) {
+                const auto &image = scene.images[i];
+                std::vector<std::uint8_t> encoded;
+                std::string mime;
+                if (image.embedded) {
+                    encoded = encode_rgba_png(image.embedded->width, image.embedded->height, image.embedded->pixels,
+                                              png_compression_level);
+                    mime = "image/png";
+                } else if (image.external) {
+                    const fs::path source_path = image.external->source_path;
+                    if (!fs::exists(source_path)) {
+                        throw std::runtime_error("Missing external image: " + source_path.string());
+                    }
+                    const std::string extension = extension_lower(source_path);
+                    if (extension == ".png") {
+                        mime = "image/png";
+                    } else if (extension == ".jpg" || extension == ".jpeg") {
+                        mime = "image/jpeg";
+                    } else {
+                        throw std::runtime_error("Unsupported external image format");
+                    }
+                    if (extension == ".png") {
+                        int w = 0, h = 0, n = 0;
+                        unsigned char *data = stbi_load(source_path.string().c_str(), &w, &h, &n, 4);
+                        if (!data || w <= 0 || h <= 0) {
+                            if (data) {
+                                stbi_image_free(data);
+                            }
+                            throw std::runtime_error("Failed to decode pattern PNG: " + source_path.string());
+                        }
+                        std::vector<std::uint8_t> rgba(data, data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4u);
+                        stbi_image_free(data);
+                        encoded = encode_rgba_png(w, h, rgba, png_compression_level);
+                    } else {
+                        encoded = read_file_bytes(source_path);
+                    }
+                } else {
+                    throw std::runtime_error("Image has no source");
+                }
+                const BufferSlice slice = buffer_builder.append_bytes(encoded);
+                const int view_index = cJSON_GetArraySize(buffer_views);
+                cJSON *view = require_json(cJSON_CreateObject(), "image bufferView");
+                cJSON_AddItemToObject(view, "buffer", json_number(0));
+                cJSON_AddItemToObject(view, "byteOffset", json_number(slice.offset));
+                cJSON_AddItemToObject(view, "byteLength", json_number(slice.length));
+                cJSON_AddItemToArray(buffer_views, view);
+                image_buffer_views[i] = view_index;
+                image_mime_types[i] = std::move(mime);
+            }
+        } else {
+            fs::create_directories(images_dir);
+            std::set<std::string> used_names;
+            for (const auto &image : scene.images) {
+                std::string file_name;
+                if (image.embedded) {
+                    file_name =
+                        unique_file_name("image_" + std::to_string(image.embedded->object_id) + ".png", used_names);
+                } else if (image.external) {
+                    file_name = unique_file_name(fs::path(image.external->source_path).filename().string(), used_names);
+                } else {
+                    throw std::runtime_error("Image has no source");
+                }
+                const fs::path target = images_dir / file_name;
+                if (image.embedded) {
+                    util::PngWriter::write_rgba(target.string(), image.embedded->width, image.embedded->height,
+                                                image.embedded->pixels, png_compression_level);
+                } else {
+                    const fs::path source_path = image.external->source_path;
+                    if (!fs::exists(source_path)) {
+                        throw std::runtime_error("Missing external image: " + source_path.string());
+                    }
+                    const std::string extension = extension_lower(source_path);
+                    if (extension != ".png" && extension != ".jpg" && extension != ".jpeg") {
+                        throw std::runtime_error("Unsupported external image format");
+                    }
+                    if (extension == ".png") {
+                        int w = 0, h = 0, n = 0;
+                        unsigned char *data = stbi_load(source_path.string().c_str(), &w, &h, &n, 4);
+                        if (!data || w <= 0 || h <= 0) {
+                            if (data) {
+                                stbi_image_free(data);
+                            }
+                            throw std::runtime_error("Failed to decode pattern PNG: " + source_path.string());
+                        }
+                        std::vector<std::uint8_t> rgba(
+                            data, data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4u);
+                        stbi_image_free(data);
+                        util::PngWriter::write_rgba(target.string(), w, h, rgba, png_compression_level);
+                    } else {
+                        fs::copy_file(source_path, target,
+                                      overwrite ? fs::copy_options::overwrite_existing : fs::copy_options::none);
+                    }
+                }
+                image_uris.push_back(images_dir.filename().string() + "/" + file_name);
+                image_paths.push_back(target.string());
+            }
+        }
+    }
+
+    // Final BIN chunk length must include padding used by GLB packing.
+    buffer_builder.align_public(4);
 
     cJSON *cameras_json = require_json(cJSON_CreateArray(), "cameras");
     for (const auto &camera : scene.cameras) {
@@ -439,7 +638,16 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
     for (const auto &node : scene.nodes) {
         cJSON *n = require_json(cJSON_CreateObject(), "node");
         cJSON_AddItemToObject(n, "name", json_string(node.name));
-        if (node.matrix) {
+        if (node.translation) {
+            cJSON_AddItemToObject(n, "translation", json_float_array_as_double(*node.translation));
+        }
+        if (node.rotation) {
+            cJSON_AddItemToObject(n, "rotation", json_float_array_as_double(*node.rotation));
+        }
+        if (node.scale) {
+            cJSON_AddItemToObject(n, "scale", json_float_array_as_double(*node.scale));
+        }
+        if (node.matrix && !node.translation && !node.rotation && !node.scale) {
             cJSON_AddItemToObject(n, "matrix", json_double_array(scene::row_major_to_column_major_list(*node.matrix)));
         }
         if (node.mesh_index) {
@@ -474,7 +682,12 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
     for (std::size_t i = 0; i < scene.images.size(); ++i) {
         cJSON *im = require_json(cJSON_CreateObject(), "image");
         cJSON_AddItemToObject(im, "name", json_string(scene.images[i].name));
-        cJSON_AddItemToObject(im, "uri", json_string(image_uris[i]));
+        if (write_glb) {
+            cJSON_AddItemToObject(im, "mimeType", json_string(image_mime_types[i]));
+            cJSON_AddItemToObject(im, "bufferView", json_number(image_buffer_views[i]));
+        } else {
+            cJSON_AddItemToObject(im, "uri", json_string(image_uris[i]));
+        }
         cJSON_AddItemToArray(images_json, im);
     }
 
@@ -506,12 +719,88 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
 
     cJSON_AddItemToObject(root.get(), "nodes", nodes_json);
     cJSON_AddItemToObject(root.get(), "meshes", meshes_json);
+
+    auto add_buffer_view = [&](const BufferSlice &slice) -> int {
+        const int index = cJSON_GetArraySize(buffer_views);
+        cJSON *json = require_json(cJSON_CreateObject(), "bufferView");
+        cJSON_AddItemToObject(json, "buffer", json_number(0));
+        cJSON_AddItemToObject(json, "byteOffset", json_number(slice.offset));
+        cJSON_AddItemToObject(json, "byteLength", json_number(slice.length));
+        cJSON_AddItemToArray(buffer_views, json);
+        return index;
+    };
+    auto add_accessor = [&](int buffer_view_index, int component_type, int count, const char *type,
+                            const std::optional<std::vector<double>> &min_v,
+                            const std::optional<std::vector<double>> &max_v) -> int {
+        const int index = cJSON_GetArraySize(accessors);
+        cJSON *json = require_json(cJSON_CreateObject(), "accessor");
+        cJSON_AddItemToObject(json, "bufferView", json_number(buffer_view_index));
+        cJSON_AddItemToObject(json, "componentType", json_number(component_type));
+        cJSON_AddItemToObject(json, "count", json_number(count));
+        cJSON_AddItemToObject(json, "type", json_string(type));
+        if (min_v) {
+            cJSON_AddItemToObject(json, "min", json_double_array(*min_v));
+        }
+        if (max_v) {
+            cJSON_AddItemToObject(json, "max", json_double_array(*max_v));
+        }
+        cJSON_AddItemToArray(accessors, json);
+        return index;
+    };
+
+    cJSON *animations_json = require_json(cJSON_CreateArray(), "animations");
+    for (const auto &animation : scene.animations) {
+        if (animation.channels.empty() || animation.samplers.empty()) {
+            continue;
+        }
+        cJSON *anim = require_json(cJSON_CreateObject(), "animation");
+        cJSON_AddItemToObject(anim, "name", json_string(animation.name));
+        cJSON *samplers_json_anim = require_json(cJSON_CreateArray(), "animation samplers");
+        for (const auto &sampler : animation.samplers) {
+            const auto time_slice = buffer_builder.append_float_array(sampler.times);
+            const int time_view = add_buffer_view(time_slice);
+            const auto time_min = list_of_component_extremes(sampler.times, 1, true);
+            const auto time_max = list_of_component_extremes(sampler.times, 1, false);
+            const int time_acc =
+                add_accessor(time_view, 5126, static_cast<int>(sampler.times.size()), "SCALAR", time_min, time_max);
+
+            const auto value_slice = buffer_builder.append_float_array(sampler.values);
+            const int value_view = add_buffer_view(value_slice);
+            const char *type = sampler.component_count == 4 ? "VEC4" : "VEC3";
+            const int value_count =
+                sampler.component_count > 0 ? static_cast<int>(sampler.values.size() / sampler.component_count) : 0;
+            const int value_acc =
+                add_accessor(value_view, 5126, value_count, type, std::nullopt, std::nullopt);
+
+            cJSON *s = require_json(cJSON_CreateObject(), "animation sampler");
+            cJSON_AddItemToObject(s, "input", json_number(time_acc));
+            cJSON_AddItemToObject(s, "output", json_number(value_acc));
+            cJSON_AddItemToObject(s, "interpolation", json_string(sampler.interpolation));
+            cJSON_AddItemToArray(samplers_json_anim, s);
+        }
+        cJSON *channels_json = require_json(cJSON_CreateArray(), "animation channels");
+        for (const auto &channel : animation.channels) {
+            cJSON *ch = require_json(cJSON_CreateObject(), "animation channel");
+            cJSON_AddItemToObject(ch, "sampler", json_number(channel.sampler_index));
+            cJSON *target = require_json(cJSON_CreateObject(), "animation target");
+            cJSON_AddItemToObject(target, "node", json_number(channel.node_index));
+            cJSON_AddItemToObject(target, "path", json_string(channel.path));
+            cJSON_AddItemToObject(ch, "target", target);
+            cJSON_AddItemToArray(channels_json, ch);
+        }
+        cJSON_AddItemToObject(anim, "samplers", samplers_json_anim);
+        cJSON_AddItemToObject(anim, "channels", channels_json);
+        cJSON_AddItemToArray(animations_json, anim);
+    }
+
     cJSON_AddItemToObject(root.get(), "accessors", accessors);
     cJSON_AddItemToObject(root.get(), "bufferViews", buffer_views);
 
     cJSON *buffers = require_json(cJSON_CreateArray(), "buffers");
     cJSON *buffer0 = require_json(cJSON_CreateObject(), "buffer0");
-    cJSON_AddItemToObject(buffer0, "uri", json_string(bin_path.filename().string()));
+    if (!write_glb) {
+        cJSON_AddItemToObject(buffer0, "uri", json_string(bin_path.filename().string()));
+    }
     cJSON_AddItemToObject(buffer0, "byteLength", json_number(buffer_builder.size()));
     cJSON_AddItemToArray(buffers, buffer0);
     cJSON_AddItemToObject(root.get(), "buffers", buffers);
@@ -541,33 +830,50 @@ scene::GltfWriteResult GltfWriter::write(const scene::SceneIr &scene, const std:
     } else {
         cJSON_Delete(cameras_json);
     }
-
-    {
-        std::unique_ptr<char, CJsonPrintDeleter> printed(cJSON_Print(root.get()));
-        if (!printed) {
-            throw std::runtime_error("cJSON_Print failed");
-        }
-        std::ofstream out(normalized_output);
-        if (!out) {
-            throw std::runtime_error("Failed to write glTF: " + normalized_output.string());
-        }
-        out << printed.get() << '\n';
-    }
-    {
-        std::ofstream out(bin_path, std::ios::binary);
-        if (!out) {
-            throw std::runtime_error("Failed to write bin: " + bin_path.string());
-        }
-        out.write(reinterpret_cast<const char *>(buffer_builder.bytes().data()),
-                  static_cast<std::streamsize>(buffer_builder.bytes().size()));
+    if (cJSON_GetArraySize(animations_json) > 0) {
+        cJSON_AddItemToObject(root.get(), "animations", animations_json);
+    } else {
+        cJSON_Delete(animations_json);
     }
 
-    // Round-trip through cgltf to ensure the cJSON document is valid glTF 2.0.
+    std::unique_ptr<char, CJsonPrintDeleter> printed(cJSON_PrintUnformatted(root.get()));
+    if (!printed) {
+        throw std::runtime_error("cJSON_PrintUnformatted failed");
+    }
+
+    if (write_glb) {
+        write_glb_file(normalized_output, printed.get(), buffer_builder.bytes());
+    } else {
+        {
+            std::ofstream out(normalized_output);
+            if (!out) {
+                throw std::runtime_error("Failed to write glTF: " + normalized_output.string());
+            }
+            // Pretty JSON for .gltf side files.
+            std::unique_ptr<char, CJsonPrintDeleter> pretty(cJSON_Print(root.get()));
+            if (!pretty) {
+                throw std::runtime_error("cJSON_Print failed");
+            }
+            out << pretty.get() << '\n';
+        }
+        {
+            std::ofstream out(bin_path, std::ios::binary);
+            if (!out) {
+                throw std::runtime_error("Failed to write bin: " + bin_path.string());
+            }
+            out.write(reinterpret_cast<const char *>(buffer_builder.bytes().data()),
+                      static_cast<std::streamsize>(buffer_builder.bytes().size()));
+        }
+    }
+
+    // Round-trip through cgltf to ensure the document is valid glTF 2.0.
     validate_with_cgltf(normalized_output.string());
 
     scene::GltfWriteResult result;
     result.gltf_path = normalized_output.string();
-    result.bin_path = bin_path.string();
+    if (!write_glb) {
+        result.bin_path = bin_path.string();
+    }
     result.image_paths = std::move(image_paths);
     return result;
 }

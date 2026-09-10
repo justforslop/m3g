@@ -12,7 +12,8 @@
 namespace {
 
 constexpr const char *USAGE =
-    "Usage: slop <input.m3g> <output.gltf> [--pattern <image.{png|jpg|jpeg}>] [--overwrite] [--verbose]";
+    "Usage: slop <input.m3g> <output.{gltf|glb}> [--pattern <image.{png|jpg|jpeg}>] "
+    "[--png-level <0-9>] [--overwrite] [--verbose]";
 
 struct CommandLine {
     std::string input_path;
@@ -20,6 +21,7 @@ struct CommandLine {
     bool overwrite = false;
     bool verbose = false;
     std::optional<std::string> pattern_path;
+    int png_compression_level = 8;
 };
 
 std::optional<CommandLine> parse_command(const std::vector<std::string> &args) {
@@ -45,6 +47,19 @@ std::optional<CommandLine> parse_command(const std::vector<std::string> &args) {
                 throw std::invalid_argument("Missing value for --pattern option.");
             }
             command.pattern_path = args[++index];
+        } else if (arg == "--png-level" || arg == "--compress-level") {
+            if (index + 1 >= args.size() || args[index + 1].rfind("--", 0) == 0) {
+                throw std::invalid_argument("Missing value for --png-level option.");
+            }
+            const std::string &value = args[++index];
+            try {
+                command.png_compression_level = std::stoi(value);
+            } catch (const std::exception &) {
+                throw std::invalid_argument("Invalid --png-level value: " + value);
+            }
+            if (command.png_compression_level < 0 || command.png_compression_level > 9) {
+                throw std::invalid_argument("--png-level must be between 0 and 9.");
+            }
         } else if (arg.rfind("--", 0) == 0) {
             throw std::invalid_argument("Unknown option: " + arg);
         } else {
@@ -84,13 +99,14 @@ int main(int argc, char **argv) {
     try {
         slop::M3gConverter converter;
         auto report = converter.convert(command->input_path, command->output_path, command->overwrite,
-                                        command->pattern_path);
+                                        command->pattern_path, command->png_compression_level);
         const auto &decoded = report.decoded;
         if (command->verbose) {
             std::cout << "Converted " << decoded.source_path << " -> " << report.paths.gltf_path << '\n';
             std::cout << "Nodes=" << decoded.node_count() << ", meshes=" << decoded.mesh_count()
                       << ", materials=" << decoded.material_count() << ", textures=" << decoded.texture_count()
-                      << ", images=" << decoded.image_count() << ", cameras=" << decoded.camera_count() << '\n';
+                      << ", images=" << decoded.image_count() << ", cameras=" << decoded.camera_count()
+                      << ", animations=" << decoded.animation_count() << '\n';
             if (!decoded.warnings().empty()) {
                 std::cout << "Warnings:\n";
                 for (const auto &warning : decoded.warnings()) {

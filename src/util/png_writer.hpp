@@ -9,7 +9,8 @@ namespace util {
 
 // RGBA8 image writer backed by stb_image_write (stbi_write_png).
 struct PngWriter {
-    static void write_rgba(const std::string &path, int width, int height, const std::vector<std::uint8_t> &pixels);
+    static void write_rgba(const std::string &path, int width, int height, const std::vector<std::uint8_t> &pixels,
+                           int compression_level = 8);
 };
 
 } // namespace util

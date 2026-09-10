@@ -9,7 +9,8 @@ namespace gltf {
 
 class GltfWriter {
 public:
-    scene::GltfWriteResult write(const scene::SceneIr &scene, const std::string &output_path, bool overwrite);
+    scene::GltfWriteResult write(const scene::SceneIr &scene, const std::string &output_path, bool overwrite,
+                                 int png_compression_level = 8);
 };
 
 } // namespace gltf

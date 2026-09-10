@@ -89,9 +89,31 @@ struct SceneCameraIr {
 struct SceneNodeIr {
     std::string name;
     std::optional<std::vector<float>> matrix;
+    std::optional<std::vector<float>> translation;
+    std::optional<std::vector<float>> rotation;
+    std::optional<std::vector<float>> scale;
     std::optional<int> mesh_index;
     std::optional<int> camera_index;
     std::vector<int> children;
+};
+
+struct SceneAnimationSamplerIr {
+    std::vector<float> times;
+    std::vector<float> values;
+    std::string interpolation = "LINEAR";
+    int component_count = 3;
+};
+
+struct SceneAnimationChannelIr {
+    int sampler_index = 0;
+    int node_index = 0;
+    std::string path;
+};
+
+struct SceneAnimationIr {
+    std::string name;
+    std::vector<SceneAnimationSamplerIr> samplers;
+    std::vector<SceneAnimationChannelIr> channels;
 };
 
 struct SceneIr {
@@ -103,6 +125,7 @@ struct SceneIr {
     std::vector<SceneImageIr> images;
     std::vector<SceneSamplerIr> samplers;
     std::vector<SceneCameraIr> cameras;
+    std::vector<SceneAnimationIr> animations;
     std::vector<ConversionWarning> warnings;
 };
 

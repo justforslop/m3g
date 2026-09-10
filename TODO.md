@@ -1,15 +1,12 @@
 # TODO
 
 ## High priority
-- Fix the fail in display color pattern in the demo
 
-```bash
-make debug 
-./build/debug ./assets/90.m3g
-```
 - Add embedded documentation in the header file, requires the doxygen style.
   - This allows the direct generation for the documentation files.
 - Fix file naming, mainly in include/
+- Fix project naming.
+- Add BUILD.md for instructing dependencies required to install for build.
 
 ## Mid priority
 
@@ -47,6 +44,8 @@ make debug
  *   safety if you guarantee it).
  */
 ```
+
+- add support for compressed image texture
 
 ## Low priority
 

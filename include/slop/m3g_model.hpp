@@ -39,6 +39,38 @@ struct ObjectTypes {
     static constexpr int EXTERNAL_REFERENCE = 0xFF;
 };
 
+struct AnimationProperty {
+    static constexpr int ALPHA = 256;
+    static constexpr int AMBIENT_COLOR = 257;
+    static constexpr int COLOR = 258;
+    static constexpr int CROP = 259;
+    static constexpr int DENSITY = 260;
+    static constexpr int DIFFUSE_COLOR = 261;
+    static constexpr int EMISSIVE_COLOR = 262;
+    static constexpr int FAR_DISTANCE = 263;
+    static constexpr int FIELD_OF_VIEW = 264;
+    static constexpr int INTENSITY = 265;
+    static constexpr int MORPH_WEIGHTS = 266;
+    static constexpr int NEAR_DISTANCE = 267;
+    static constexpr int ORIENTATION = 268;
+    static constexpr int PICKABILITY = 269;
+    static constexpr int SCALE = 270;
+    static constexpr int SHININESS = 271;
+    static constexpr int SPECULAR_COLOR = 272;
+    static constexpr int SPOT_ANGLE = 273;
+    static constexpr int SPOT_EXPONENT = 274;
+    static constexpr int TRANSLATION = 275;
+    static constexpr int VISIBILITY = 276;
+};
+
+struct KeyframeInterpolation {
+    static constexpr int LINEAR = 176;
+    static constexpr int SLERP = 177;
+    static constexpr int SPLINE = 178;
+    static constexpr int SQUAD = 179;
+    static constexpr int STEP = 180;
+};
+
 inline std::string type_name_for_object_type(int object_type) {
     switch (object_type) {
     case ObjectTypes::HEADER:
