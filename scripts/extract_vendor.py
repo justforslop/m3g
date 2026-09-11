@@ -8,8 +8,28 @@ import subprocess
 import sys
 
 
+def find_7z() -> str:
+    """Locate 7-Zip CLI on POSIX or Windows (PATH + common install dirs)."""
+    for name in ("7z", "7z.exe", "7za", "7za.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+    if os.name == "nt":
+        for candidate in (
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+    sys.exit(
+        "7z not found on PATH (install 7-Zip / p7zip; on Windows add 7z.exe to PATH)"
+    )
+
+
 def run_7z(archive: str, out_dir: str) -> None:
-    subprocess.check_call(["7z", "x", archive, f"-o{out_dir}", "-y"])
+    exe = find_7z()
+    # List form, no shell — required on Windows so paths with spaces work.
+    subprocess.check_call([exe, "x", archive, f"-o{out_dir}", "-y"])
 
 
 def touch(path: str) -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Portable unit-test runner (Make-free). Used by: ninja test
+# Portable unit-test runner (Make-free). Used by: zig build test
 # Filters (optional): n=1,2  or  s=10
 set -eu
 

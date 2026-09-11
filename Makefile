@@ -5,25 +5,36 @@
 #   make debug      # same
 #   make view       # same as make debug
 #   make release    # CLI    -> build/m3g
+#   make lib        # static package library -> build/lib/libm3g.a
+#   make install    # headers + libm3g.a + m3g.pc (+ optional CLI)
+#   make uninstall
 #   make clean
 #   make doc         # Doxygen HTML -> docs/api/html (needs doxygen)
 #
-# Ninja (same targets/outputs; one file build.ninja — Linux + Windows/MinGW):
-#   ninja / ninja debug / ninja view / ninja release / ninja test / ninja setup
-#   ninja doc
-#   Windows: uncomment MinGW overrides at top of build.ninja (see BUILD.md)
+# Package install (DESTDIR + PREFIX, like autotools):
+#   make setup && make lib BUILD=release
+#   make install PREFIX=/usr/local DESTDIR=/tmp/stage
+#   # pkg-config --cflags --libs m3g
+#
+# Bundle toggles (default ON; set =0 to omit vendor + adapter, like CMake):
+#   make lib M3G_BUNDLE_MINIZ=0 M3G_BUNDLE_STB=0 M3G_BUNDLE_CJSON=0 M3G_BUNDLE_CGLTF=0
+#   make lib M3G_WITH_EXPORT=0   # decode-only .a
+#
+# Zig (portable; Linux + Windows + cross — see build.zig / BUILD.md):
+#   zig build -p build / lib / debug / view / release / test / setup / doc
 #
 # Viewer:
 #   ./build/debug assets/90.m3g
 #
 # Object files live under build/obj/<config>/ so build/debug can be the binary.
 #
-# CMake (LSP compile_commands, optional ctest):
+# CMake (LSP compile_commands, optional ctest, find_package):
 #   cmake -S . -B build && cmake --build build
 #
 # Vendored headers:
-#   make setup   # or: ninja setup
-.PHONY: all debug release view clean setup setup-libs setup-cgltf setup-cjson setup-stb setup-sokol setup-miniz setup-imgui test doc
+#   make setup   # or: zig build setup
+.PHONY: all debug release view lib package install uninstall clean \
+	setup setup-libs setup-cgltf setup-cjson setup-stb setup-sokol setup-miniz setup-imgui test doc
 
 MINIZ_TAG := 3.1.2
 MINIZ_URL := https://github.com/richgel999/miniz/releases/download/$(MINIZ_TAG)/miniz-$(MINIZ_TAG).zip
@@ -39,21 +50,66 @@ IMGUI_DIR := vendors/imgui
 IMGUI_STAMP := $(IMGUI_DIR)/.extracted
 
 APP      := m3g
+VERSION  := 0.1.0
 BUILDROOT := build
 SRCDIR   := src
 INCDIR   := include
 TEST_BINDIR := tests/bin
 
+# Install layout (make install / uninstall)
+DESTDIR  ?=
+PREFIX   ?= /usr/local
+BINDIR   := $(PREFIX)/bin
+LIBDIR   := $(PREFIX)/lib
+INCLUDEDIR := $(PREFIX)/include
+PKGCONFIGDIR := $(LIBDIR)/pkgconfig
+# Install CLI with the package? 1 = yes when build/m3g exists or after release
+INSTALL_CLI ?= 1
+
 CXX      ?= c++
 CC       ?= gcc
+AR       ?= ar
+ARFLAGS  ?= rcs
 BUILD    ?= debug
 # Objects must not use build/debug/ — that path is the viewer executable.
 OBJDIR   := $(BUILDROOT)/obj/$(BUILD)
+LIBDIR_BUILD := $(BUILDROOT)/lib
+INCDIR_BUILD := $(BUILDROOT)/include
+PKGDIR_BUILD := $(BUILDROOT)/lib/pkgconfig
 
-APP_CXXFLAGS_debug   := -std=c++17 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE -DAPP_NAME=\"$(APP)\"
-APP_CXXFLAGS_release := -std=c++17 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE -DAPP_NAME=\"$(APP)\"
-APP_CFLAGS_debug     := -std=c99 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE
-APP_CFLAGS_release   := -std=c99 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE
+# ---- Package / backend knobs (mirror CMake M3G_BUNDLE_* / M3G_WITH_EXPORT) ----
+# 1 = on, 0 = off. Full tree defaults match CMake top-level + Zig package.
+M3G_WITH_EXPORT   ?= 1
+M3G_BUNDLE_MINIZ  ?= 1
+M3G_BUNDLE_STB    ?= 1
+M3G_BUNDLE_CJSON  ?= 1
+M3G_BUNDLE_CGLTF  ?= 1
+
+# Isolate lib objects by bundle flags so toggling M3G_BUNDLE_* cannot reuse stale .o.
+LIB_CFG := e$(M3G_WITH_EXPORT)m$(M3G_BUNDLE_MINIZ)s$(M3G_BUNDLE_STB)j$(M3G_BUNDLE_CJSON)g$(M3G_BUNDLE_CGLTF)
+LIB_OBJDIR := $(BUILDROOT)/obj/lib-$(BUILD)-$(LIB_CFG)
+
+M3G_BACKEND_DEFS :=
+ifeq ($(M3G_BUNDLE_MINIZ),1)
+M3G_BACKEND_DEFS += -DM3G_HAS_MINIZ_BACKEND=1
+endif
+ifeq ($(M3G_BUNDLE_STB),1)
+M3G_BACKEND_DEFS += -DM3G_HAS_STB_BACKEND=1 -DM3G_IMPL_STB=1
+endif
+ifeq ($(M3G_BUNDLE_CJSON),1)
+M3G_BACKEND_DEFS += -DM3G_HAS_CJSON_BACKEND=1
+endif
+ifeq ($(M3G_BUNDLE_CGLTF),1)
+M3G_BACKEND_DEFS += -DM3G_HAS_CGLTF_BACKEND=1 -DM3G_IMPL_CGLTF=1
+endif
+ifeq ($(M3G_WITH_EXPORT),0)
+M3G_BACKEND_DEFS += -DM3G_NO_EXPORT=1
+endif
+
+APP_CXXFLAGS_debug   := -std=c++17 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE -DAPP_NAME=\"$(APP)\" $(M3G_BACKEND_DEFS)
+APP_CXXFLAGS_release := -std=c++17 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE -DAPP_NAME=\"$(APP)\" $(M3G_BACKEND_DEFS)
+APP_CFLAGS_debug     := -std=c99 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE $(M3G_BACKEND_DEFS)
+APP_CFLAGS_release   := -std=c99 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE $(M3G_BACKEND_DEFS)
 APP_CXXFLAGS         := $(APP_CXXFLAGS_$(BUILD))
 APP_CFLAGS           := $(APP_CFLAGS_$(BUILD))
 APP_CPPFLAGS         := -I. -I$(INCDIR) -I$(SRCDIR) -Ivendors -Ivendors/cgltf -Ivendors/libs -Ivendors/miniz
@@ -61,9 +117,54 @@ VIEW_CPPFLAGS        := $(APP_CPPFLAGS) -Ivendors/imgui
 APP_LDFLAGS          :=
 APP_LIBS             := -lm
 VIEW_LIBS            := $(APP_LIBS) -lGL -lX11 -lXi -lXcursor -ldl -lpthread
+# Static .a + C++ global ctors (default backends): whole-archive keeps adapter TUs.
+PKG_LIBS             := -Wl,--whole-archive -l$(APP) -Wl,--no-whole-archive -lm -lstdc++
 
+# ---- Library package sources (no main.cpp / no viewer) ----
+LIB_CXX_SRCS := $(SRCDIR)/decode/decoder.cpp
+ifeq ($(M3G_WITH_EXPORT),1)
+LIB_CXX_SRCS += \
+	$(SRCDIR)/converter.cpp \
+	$(SRCDIR)/export/gltf_exporter.cpp \
+	$(SRCDIR)/gltf/gltf_writer.cpp \
+	$(SRCDIR)/util/png_writer.cpp
+endif
+ifeq ($(M3G_BUNDLE_MINIZ),1)
+LIB_CXX_SRCS += $(SRCDIR)/deflate_io_miniz.cpp
+endif
+ifeq ($(M3G_BUNDLE_STB),1)
+LIB_CXX_SRCS += $(SRCDIR)/image_io_stb.cpp
+endif
+ifeq ($(M3G_BUNDLE_CJSON),1)
+LIB_CXX_SRCS += $(SRCDIR)/json_io_cjson.cpp
+endif
+ifeq ($(M3G_BUNDLE_CGLTF),1)
+LIB_CXX_SRCS += $(SRCDIR)/gltf_io_cgltf.cpp
+endif
+
+LIB_C_SRCS :=
+ifeq ($(M3G_BUNDLE_STB),1)
+LIB_C_SRCS += $(SRCDIR)/impl.c
+else ifeq ($(M3G_BUNDLE_CGLTF),1)
+LIB_C_SRCS += $(SRCDIR)/impl.c
+endif
+ifeq ($(M3G_BUNDLE_MINIZ),1)
+LIB_C_SRCS += vendors/miniz/miniz.c
+endif
+ifeq ($(M3G_BUNDLE_CJSON),1)
+LIB_C_SRCS += vendors/cjson/cJSON.c
+endif
+
+LIB_CXX_OBJS := $(patsubst $(SRCDIR)/%.cpp,$(LIB_OBJDIR)/%.o,$(filter $(SRCDIR)/%,$(LIB_CXX_SRCS)))
+LIB_C_OBJS := $(patsubst $(SRCDIR)/%.c,$(LIB_OBJDIR)/%.o,$(filter $(SRCDIR)/%,$(LIB_C_SRCS)))
+LIB_VENDOR_C_OBJS := $(patsubst vendors/%.c,$(LIB_OBJDIR)/vendors/%.o,$(filter vendors/%,$(LIB_C_SRCS)))
+LIB_OBJS := $(LIB_CXX_OBJS) $(LIB_C_OBJS) $(LIB_VENDOR_C_OBJS)
+
+STATIC_LIB := $(LIBDIR_BUILD)/lib$(APP).a
+PC_BUILD   := $(PKGDIR_BUILD)/$(APP).pc
+
+# Full CLI / viewer still compile the whole tree (historical Make behavior).
 CXX_SRCS := $(shell find $(SRCDIR) -name '*.cpp' 2>/dev/null)
-# Exclude sokol viewer from the CLI app.
 C_SRCS   := $(filter-out $(SRCDIR)/debug.c,$(shell find $(SRCDIR) -name '*.c' 2>/dev/null))
 VENDOR_C_SRCS := vendors/cjson/cJSON.c vendors/miniz/miniz.c
 CXX_OBJS := $(patsubst $(SRCDIR)/%.cpp,$(OBJDIR)/%.o,$(CXX_SRCS))
@@ -84,6 +185,58 @@ debug view:
 
 release:
 	@$(MAKE) --no-print-directory BUILD=release $(BIN)
+
+# Static package library + staged headers + pkg-config (build tree).
+lib package:
+	@$(MAKE) --no-print-directory BUILD=release $(STATIC_LIB) $(PC_BUILD) stage-headers
+
+stage-headers: | $(INCDIR_BUILD)
+	cp -f $(INCDIR)/m3g.h $(INCDIR)/m3g.hpp $(INCDIR_BUILD)/
+
+$(STATIC_LIB): $(LIB_OBJS) | $(LIBDIR_BUILD)
+	@echo "AR  $@"
+	@rm -f $@
+	$(AR) $(ARFLAGS) $@ $(LIB_OBJS)
+
+$(PC_BUILD): Makefile | $(PKGDIR_BUILD)
+	@echo "PC  $@"
+	@printf '%s\n' \
+		'prefix=$(PREFIX)' \
+		'exec_prefix=$${prefix}' \
+		'libdir=$${exec_prefix}/lib' \
+		'includedir=$${prefix}/include' \
+		'' \
+		'Name: m3g' \
+		'Description: JSR-184 / M3G decode and glTF convert (C++17)' \
+		'URL: https://github.com/justforslop/m3g' \
+		'Version: $(VERSION)' \
+		'Libs: -L$${libdir} $(PKG_LIBS)' \
+		'Cflags: -I$${includedir} -std=c++17' \
+		> $@
+
+install: lib
+	@echo "INSTALL -> $(DESTDIR)$(PREFIX)"
+	install -d $(DESTDIR)$(INCLUDEDIR)
+	install -m 644 $(INCDIR)/m3g.h $(INCDIR)/m3g.hpp $(DESTDIR)$(INCLUDEDIR)/
+	install -d $(DESTDIR)$(LIBDIR)
+	install -m 644 $(STATIC_LIB) $(DESTDIR)$(LIBDIR)/lib$(APP).a
+	install -d $(DESTDIR)$(PKGCONFIGDIR)
+	@# Rewrite prefix in the installed .pc (build copy used PREFIX already).
+	sed -e 's|^prefix=.*|prefix=$(PREFIX)|' $(PC_BUILD) > $(DESTDIR)$(PKGCONFIGDIR)/$(APP).pc
+	@chmod 644 $(DESTDIR)$(PKGCONFIGDIR)/$(APP).pc
+ifeq ($(INSTALL_CLI),1)
+	@$(MAKE) --no-print-directory BUILD=release $(BIN)
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 755 $(BIN) $(DESTDIR)$(BINDIR)/$(APP)
+endif
+	@echo "Installed m3g $(VERSION) (lib$(APP).a, headers, $(APP).pc$(if $(filter 1,$(INSTALL_CLI)),, ; CLI skipped))"
+
+uninstall:
+	rm -f $(DESTDIR)$(INCLUDEDIR)/m3g.h $(DESTDIR)$(INCLUDEDIR)/m3g.hpp
+	rm -f $(DESTDIR)$(LIBDIR)/lib$(APP).a
+	rm -f $(DESTDIR)$(PKGCONFIGDIR)/$(APP).pc
+	rm -f $(DESTDIR)$(BINDIR)/$(APP)
+	@echo "Uninstalled m3g from $(DESTDIR)$(PREFIX)"
 
 $(BIN): $(OBJS) | $(BUILDROOT)
 	@echo "LD  $@"
@@ -119,7 +272,23 @@ $(OBJDIR)/vendors/%.o: vendors/%.c
 	@echo "CC  $<"
 	$(CC) $(APP_CFLAGS) $(APP_CPPFLAGS) -c -o $@ $<
 
-$(BUILDROOT) $(OBJDIR) $(TEST_BINDIR):
+# Package library objects (separate tree from CLI/viewer).
+$(LIB_OBJDIR)/%.o: $(SRCDIR)/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX $<  (lib)"
+	$(CXX) $(APP_CXXFLAGS) $(APP_CPPFLAGS) -c -o $@ $<
+
+$(LIB_OBJDIR)/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(dir $@)
+	@echo "CC  $<  (lib)"
+	$(CC) $(APP_CFLAGS) $(APP_CPPFLAGS) -c -o $@ $<
+
+$(LIB_OBJDIR)/vendors/%.o: vendors/%.c
+	@mkdir -p $(dir $@)
+	@echo "CC  $<  (lib)"
+	$(CC) $(APP_CFLAGS) $(APP_CPPFLAGS) -c -o $@ $<
+
+$(BUILDROOT) $(OBJDIR) $(LIB_OBJDIR) $(TEST_BINDIR) $(LIBDIR_BUILD) $(INCDIR_BUILD) $(PKGDIR_BUILD):
 	@mkdir -p $@
 
 clean:
@@ -224,8 +393,8 @@ $(IMGUI_STAMP): $(IMGUI_ARCHIVE)
 # Run tests under tests/NNN_*.{c,cpp} or tests/NNN-*.{c,cpp}
 n ?=
 s ?=
-TEST_CFLAGS := -std=c99 -Wall -Wextra -g -D_DEFAULT_SOURCE
-TEST_CXXFLAGS := -std=c++17 -Wall -Wextra -g -D_DEFAULT_SOURCE
+TEST_CFLAGS := -std=c99 -Wall -Wextra -g -D_DEFAULT_SOURCE $(M3G_BACKEND_DEFS)
+TEST_CXXFLAGS := -std=c++17 -Wall -Wextra -g -D_DEFAULT_SOURCE $(M3G_BACKEND_DEFS)
 TEST_INCLUDES := -I. -Iinclude -Ivendors/libs
 TEST_M3G_INCLUDES := -I. -Iinclude -Isrc -Ivendors -Ivendors/libs -Ivendors/cgltf -Ivendors/miniz
 TEST_IMPL := tests/impl.c

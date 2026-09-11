@@ -2,7 +2,6 @@
 
 ## High priority
 
-
 - ~~Add embedded documentation in the header file (doxygen)~~ → public API in
   `include/m3g.hpp` (`@file`, `@defgroup`, decode/export/I/O, model/scene).
 - ~~Fix project naming~~ → project/binary/namespace `m3g` (was `slop`).
@@ -10,7 +9,8 @@
 
 ## Mid priority
 
-- ~~merge the headers file into single header~~ → `include/m3g.hpp` (+ `m3g.h` C stub).
+- ~~merge the headers file into single header~~ → `include/m3g.hpp` (+ `m3g.h` C
+  stub).
 - ~~STB-style `M3G_IMPL` + `#undef M3G_IMPL` for decode~~ (`include/m3g.hpp`,
   `src/decode/decoder.cpp`). Convert/export still classic `.cpp` until
   `M3G_CONVERT_IMPL`.

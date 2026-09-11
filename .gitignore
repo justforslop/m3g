@@ -15,8 +15,9 @@ references/
 
 # auto generated
 .ccls-cache
-.ninja_lock
-.ninja_log
+.zig-cache/
+zig-out/
+__pycache__
 
 # Others
 /*.glb

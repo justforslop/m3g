@@ -23,6 +23,30 @@ option(M3G_BUILD_TESTS "Build and register unit tests" ${M3G_IS_TOP_LEVEL})
 option(M3G_ENABLE_IPO "Enable LTO/IPO on the m3g library" OFF)
 option(M3G_INSTALL "Generate install rules (package export)" ON)
 
+# glTF export TUs (gltf_writer / png_writer) need cgltf + stb_image_write headers.
+option(M3G_WITH_EXPORT "Build glTF export path (Converter / GltfExporter)" ON)
+
+# Vendored default backends — OFF when embedding so consumers supply their own
+# DeflateIo / ImageIo / JsonIo / GltfIo (and headers for export) without bloat.
+# Top-level defaults ON so CLI/tests work after `make setup` / `zig build setup`.
+option(M3G_BUNDLE_MINIZ "Compile vendors/miniz + DeflateIo adapter" ${M3G_IS_TOP_LEVEL})
+option(M3G_BUNDLE_STB "Compile stb_image(_write) impl + ImageIo adapter" ${M3G_IS_TOP_LEVEL})
+option(M3G_BUNDLE_CJSON "Compile vendors/cjson + JsonIo adapter" ${M3G_IS_TOP_LEVEL})
+option(M3G_BUNDLE_CGLTF "Compile cgltf header impl + GltfIo adapter" ${M3G_IS_TOP_LEVEL})
+
+# When not bundling, point at external single-header trees (or leave empty if
+# the parent target already has the include path).
+set(M3G_MINIZ_INCLUDE_DIR "" CACHE PATH "Include dir for miniz.h (if not M3G_BUNDLE_MINIZ)")
+set(M3G_STB_INCLUDE_DIR "" CACHE PATH "Include dir containing stb/ or stb_image*.h")
+set(M3G_CJSON_INCLUDE_DIR "" CACHE PATH "Include dir for cJSON.h (if not M3G_BUNDLE_CJSON)")
+set(M3G_CGLTF_INCLUDE_DIR "" CACHE PATH "Include dir containing cgltf/ or cgltf.h")
+
+# Imported targets the consumer already built (optional link into m3g).
+set(M3G_MINIZ_TARGET "" CACHE STRING "Optional CMake target to link for miniz")
+set(M3G_STB_TARGET "" CACHE STRING "Optional CMake target to link for stb")
+set(M3G_CJSON_TARGET "" CACHE STRING "Optional CMake target to link for cJSON")
+set(M3G_CGLTF_TARGET "" CACHE STRING "Optional CMake target to link for cgltf")
+
 # ---------------------------------------------------------------------------
 # Language / defaults (only force cache when top-level)
 # ---------------------------------------------------------------------------
@@ -51,20 +75,82 @@ set(M3G_WARNINGS -Wall -Wextra)
 # m3g library (installable package target)
 # ---------------------------------------------------------------------------
 
+# Core decode always built. Export / Converter / vendor adapters are optional.
 set(M3G_LIB_SOURCES
-    src/converter.cpp
     src/decode/decoder.cpp
-    src/deflate_io_miniz.cpp
-    src/export/gltf_exporter.cpp
-    src/gltf/gltf_writer.cpp
-    src/gltf_io_cgltf.cpp
-    src/image_io_stb.cpp
-    src/json_io_cjson.cpp
-    src/util/png_writer.cpp
-    src/impl.c
-    vendors/cjson/cJSON.c
-    vendors/miniz/miniz.c
 )
+
+if(M3G_WITH_EXPORT)
+    list(APPEND M3G_LIB_SOURCES
+        src/converter.cpp
+        src/export/gltf_exporter.cpp
+        src/gltf/gltf_writer.cpp
+        src/util/png_writer.cpp
+    )
+endif()
+
+set(M3G_BACKEND_DEFS "") # compile defs for default_backends.cpp / impl.c
+set(M3G_NEED_IMPL_C FALSE)
+
+function(m3g_require_vendor_file relpath hint)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${relpath}")
+        message(FATAL_ERROR "Missing ${relpath} (${hint})")
+    endif()
+endfunction()
+
+if(M3G_BUNDLE_MINIZ)
+    m3g_require_vendor_file("vendors/miniz/miniz.c" "run setup-miniz or set M3G_BUNDLE_MINIZ=OFF")
+    list(APPEND M3G_LIB_SOURCES src/deflate_io_miniz.cpp vendors/miniz/miniz.c)
+    list(APPEND M3G_BACKEND_DEFS M3G_HAS_MINIZ_BACKEND=1)
+endif()
+
+if(M3G_BUNDLE_STB)
+    m3g_require_vendor_file("vendors/stb/stb_image.h" "run setup-stb or set M3G_BUNDLE_STB=OFF")
+    m3g_require_vendor_file("vendors/stb/stb_image_write.h" "run setup-stb or set M3G_BUNDLE_STB=OFF")
+    list(APPEND M3G_LIB_SOURCES src/image_io_stb.cpp)
+    list(APPEND M3G_BACKEND_DEFS M3G_HAS_STB_BACKEND=1 M3G_IMPL_STB=1)
+    set(M3G_NEED_IMPL_C TRUE)
+endif()
+
+if(M3G_BUNDLE_CJSON)
+    m3g_require_vendor_file("vendors/cjson/cJSON.c" "run setup-cjson or set M3G_BUNDLE_CJSON=OFF")
+    list(APPEND M3G_LIB_SOURCES src/json_io_cjson.cpp vendors/cjson/cJSON.c)
+    list(APPEND M3G_BACKEND_DEFS M3G_HAS_CJSON_BACKEND=1)
+endif()
+
+if(M3G_BUNDLE_CGLTF)
+    m3g_require_vendor_file("vendors/cgltf/cgltf.h" "run setup-cgltf or set M3G_BUNDLE_CGLTF=OFF")
+    m3g_require_vendor_file("vendors/cgltf/cgltf_write.h" "run setup-cgltf or set M3G_BUNDLE_CGLTF=OFF")
+    list(APPEND M3G_LIB_SOURCES src/gltf_io_cgltf.cpp)
+    list(APPEND M3G_BACKEND_DEFS M3G_HAS_CGLTF_BACKEND=1 M3G_IMPL_CGLTF=1)
+    set(M3G_NEED_IMPL_C TRUE)
+endif()
+
+if(M3G_NEED_IMPL_C)
+    list(APPEND M3G_LIB_SOURCES src/impl.c)
+endif()
+
+if(M3G_BUILD_CLI AND M3G_WITH_EXPORT)
+    if(NOT M3G_BUNDLE_MINIZ OR NOT M3G_BUNDLE_STB OR NOT M3G_BUNDLE_CGLTF)
+        message(WARNING
+            "M3G_BUILD_CLI=ON with export expects default backends "
+            "(M3G_BUNDLE_MINIZ/STB/CGLTF). Without them the CLI must not be "
+            "the only place backends are registered — provide set_*_io or enable bundles.")
+    endif()
+endif()
+
+if(M3G_WITH_EXPORT)
+    if(NOT M3G_BUNDLE_CGLTF AND M3G_CGLTF_INCLUDE_DIR STREQUAL "" AND M3G_CGLTF_TARGET STREQUAL "")
+        message(FATAL_ERROR
+            "M3G_WITH_EXPORT=ON needs cgltf headers: enable M3G_BUNDLE_CGLTF "
+            "or set M3G_CGLTF_INCLUDE_DIR / M3G_CGLTF_TARGET")
+    endif()
+    if(NOT M3G_BUNDLE_STB AND M3G_STB_INCLUDE_DIR STREQUAL "" AND M3G_STB_TARGET STREQUAL "")
+        message(FATAL_ERROR
+            "M3G_WITH_EXPORT=ON needs stb_image_write: enable M3G_BUNDLE_STB "
+            "or set M3G_STB_INCLUDE_DIR / M3G_STB_TARGET")
+    endif()
+endif()
 
 add_library(m3g ${M3G_LIB_SOURCES})
 add_library(m3g::m3g ALIAS m3g)
@@ -88,10 +174,54 @@ target_include_directories(m3g
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# Layout expected by sources: "miniz.h", "stb/stb_image.h", "cgltf/cgltf.h", "cJSON.h"
+if(M3G_BUNDLE_MINIZ)
+    target_include_directories(m3g PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendors/miniz
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendors
+    )
+elseif(NOT M3G_MINIZ_INCLUDE_DIR STREQUAL "")
+    target_include_directories(m3g PRIVATE ${M3G_MINIZ_INCLUDE_DIR})
+endif()
+
+if(M3G_BUNDLE_STB)
+    target_include_directories(m3g PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendors)
+elseif(NOT M3G_STB_INCLUDE_DIR STREQUAL "")
+    target_include_directories(m3g PRIVATE ${M3G_STB_INCLUDE_DIR})
+endif()
+
+if(M3G_BUNDLE_CJSON)
+    target_include_directories(m3g PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendors/cjson
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendors
+    )
+elseif(NOT M3G_CJSON_INCLUDE_DIR STREQUAL "")
+    target_include_directories(m3g PRIVATE ${M3G_CJSON_INCLUDE_DIR})
+endif()
+
+if(M3G_BUNDLE_CGLTF)
+    target_include_directories(m3g PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/vendors
         ${CMAKE_CURRENT_SOURCE_DIR}/vendors/cgltf
-        ${CMAKE_CURRENT_SOURCE_DIR}/vendors/miniz
-)
+    )
+elseif(NOT M3G_CGLTF_INCLUDE_DIR STREQUAL "")
+    target_include_directories(m3g PRIVATE ${M3G_CGLTF_INCLUDE_DIR})
+endif()
+
+if(NOT M3G_MINIZ_TARGET STREQUAL "")
+    target_link_libraries(m3g PUBLIC ${M3G_MINIZ_TARGET})
+endif()
+if(NOT M3G_STB_TARGET STREQUAL "")
+    target_link_libraries(m3g PUBLIC ${M3G_STB_TARGET})
+endif()
+if(NOT M3G_CJSON_TARGET STREQUAL "")
+    target_link_libraries(m3g PUBLIC ${M3G_CJSON_TARGET})
+endif()
+if(NOT M3G_CGLTF_TARGET STREQUAL "")
+    target_link_libraries(m3g PUBLIC ${M3G_CGLTF_TARGET})
+endif()
 
 if(UNIX)
     target_compile_definitions(m3g PRIVATE _DEFAULT_SOURCE)
@@ -101,7 +231,12 @@ endif()
 target_compile_definitions(m3g PRIVATE
     $<$<CONFIG:Release>:NDEBUG>
     $<$<CONFIG:MinSizeRel>:NDEBUG>
+    ${M3G_BACKEND_DEFS}
 )
+
+if(NOT M3G_WITH_EXPORT)
+    target_compile_definitions(m3g PUBLIC M3G_NO_EXPORT=1)
+endif()
 
 if(M3G_ENABLE_IPO)
     include(CheckIPOSupported)
@@ -116,6 +251,10 @@ endif()
 # ---------------------------------------------------------------------------
 # CLI tool
 # ---------------------------------------------------------------------------
+
+if(M3G_BUILD_CLI AND NOT M3G_WITH_EXPORT)
+    message(FATAL_ERROR "M3G_BUILD_CLI requires M3G_WITH_EXPORT=ON (Converter / glTF export)")
+endif()
 
 if(M3G_BUILD_CLI)
     add_executable(m3g_cli src/main.cpp)
@@ -332,4 +471,5 @@ endif()
 # Summary
 # ---------------------------------------------------------------------------
 
-message(STATUS "m3g ${PROJECT_VERSION}: CLI=${M3G_BUILD_CLI} viewer=${M3G_BUILD_VIEWER} tests=${M3G_BUILD_TESTS} install=${M3G_INSTALL}")
+message(STATUS "m3g ${PROJECT_VERSION}: CLI=${M3G_BUILD_CLI} viewer=${M3G_BUILD_VIEWER} tests=${M3G_BUILD_TESTS} install=${M3G_INSTALL} export=${M3G_WITH_EXPORT}")
+message(STATUS "m3g backends: miniz=${M3G_BUNDLE_MINIZ} stb=${M3G_BUNDLE_STB} cjson=${M3G_BUNDLE_CJSON} cgltf=${M3G_BUNDLE_CGLTF}")
