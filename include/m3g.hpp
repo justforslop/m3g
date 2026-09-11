@@ -4,7 +4,8 @@
     Do this:
         #define M3G_IMPL
     before you include this file in *one* C++ file to create the
-    implementation.
+    implementation. Declarations are in the public section; definitions are
+    under #ifdef M3G_IMPL / M3G_DECODE_IMPL (not inline).
 
     Optionally, for decode only:
         #define M3G_DECODE_IMPL
@@ -205,42 +206,15 @@ DeflateIo const *deflate_io(void);
  */
 void install_miniz_deflate_io(void);
 
-inline std::uint32_t deflate_adler32(std::uint32_t adler, unsigned char const *ptr, std::size_t buf_len) {
-    DeflateIo const *io = deflate_io();
-    if (!io || !io->adler32) {
-        throw std::runtime_error("m3g deflate I/O: adler32 callback not set (call m3g::set_deflate_io or install_miniz_deflate_io)");
-    }
-    return io->adler32(adler, ptr, buf_len, io->user);
-}
+std::uint32_t deflate_adler32(std::uint32_t adler, unsigned char const *ptr, std::size_t buf_len);
 
-inline int deflate_uncompress(unsigned char *dest, std::size_t *dest_len, unsigned char const *source,
-                              std::size_t source_len) {
-    DeflateIo const *io = deflate_io();
-    if (!io || !io->uncompress) {
-        throw std::runtime_error("m3g deflate I/O: uncompress callback not set (call m3g::set_deflate_io or install_miniz_deflate_io)");
-    }
-    return io->uncompress(dest, dest_len, source, source_len, io->user);
-}
+int deflate_uncompress(unsigned char *dest, std::size_t *dest_len, unsigned char const *source,
+                              std::size_t source_len);
 
-inline void *deflate_uncompress_to_heap(unsigned char const *source, std::size_t source_len, std::size_t *out_len,
-                                        int zlib_header) {
-    DeflateIo const *io = deflate_io();
-    if (!io || !io->uncompress_to_heap) {
-        throw std::runtime_error("m3g deflate I/O: uncompress_to_heap callback not set (call m3g::set_deflate_io or install_miniz_deflate_io)");
-    }
-    return io->uncompress_to_heap(source, source_len, out_len, zlib_header, io->user);
-}
+void *deflate_uncompress_to_heap(unsigned char const *source, std::size_t source_len, std::size_t *out_len,
+                                        int zlib_header);
 
-inline void deflate_free(void *p) {
-    if (!p) {
-        return;
-    }
-    DeflateIo const *io = deflate_io();
-    if (!io || !io->free_mem) {
-        throw std::runtime_error("m3g deflate I/O: free_mem callback not set");
-    }
-    io->free_mem(p, io->user);
-}
+void deflate_free(void *p);
 
 /**
  * @ingroup m3g_io
@@ -286,34 +260,13 @@ void install_stb_image_io(void);
  *  @brief Throw if callbacks missing; otherwise forward to @ref ImageIo.
  *  @{
  */
-inline unsigned char *image_load_file(char const *filename, int *width, int *height, int *channels_in_file,
-                                     int req_comp) {
-    ImageIo const *io = image_io();
-    if (!io || !io->load_file) {
-        throw std::runtime_error("m3g image I/O: load_file callback not set (call m3g::set_image_io or install_stb_image_io)");
-    }
-    return io->load_file(filename, width, height, channels_in_file, req_comp, io->user);
-}
+unsigned char *image_load_file(char const *filename, int *width, int *height, int *channels_in_file,
+                                     int req_comp);
 
-inline unsigned char *image_load_memory(unsigned char const *buffer, int len, int *width, int *height,
-                                       int *channels_in_file, int req_comp) {
-    ImageIo const *io = image_io();
-    if (!io || !io->load_memory) {
-        throw std::runtime_error("m3g image I/O: load_memory callback not set (call m3g::set_image_io or install_stb_image_io)");
-    }
-    return io->load_memory(buffer, len, width, height, channels_in_file, req_comp, io->user);
-}
+unsigned char *image_load_memory(unsigned char const *buffer, int len, int *width, int *height,
+                                       int *channels_in_file, int req_comp);
 
-inline void image_free_pixels(void *pixels) {
-    if (!pixels) {
-        return;
-    }
-    ImageIo const *io = image_io();
-    if (!io || !io->free_pixels) {
-        throw std::runtime_error("m3g image I/O: free_pixels callback not set");
-    }
-    io->free_pixels(pixels, io->user);
-}
+void image_free_pixels(void *pixels);
 /** @} */
 
 /**
@@ -422,161 +375,27 @@ void install_cgltf_gltf_io(void);
  *  @ingroup m3g_io
  *  @{
  */
-inline GltfIo const *require_gltf_io(char const *what) {
-    GltfIo const *io = gltf_io();
-    if (!io) {
-        throw std::runtime_error(std::string("m3g glTF I/O: not set (need ") + what +
-                                 "; call m3g::set_gltf_io or install_cgltf_gltf_io)");
-    }
-    return io;
-}
+void gltf_write_file(char const *path, void const *data, int kind);
 
-inline void gltf_write_file(char const *path, void const *data, int kind) {
-    GltfIo const *io = require_gltf_io("write_file");
-    if (!io->write_file) {
-        throw std::runtime_error("m3g glTF I/O: write_file callback not set");
-    }
-    const int rc = io->write_file(path, data, kind, io->user);
-    if (rc != GLTF_IO_OK) {
-        throw std::runtime_error(std::string("m3g glTF I/O: write_file failed (rc ") + std::to_string(rc) +
-                                 ") for " + path);
-    }
-}
+void gltf_parse_file(char const *path, void **out_data);
 
-inline void gltf_parse_file(char const *path, void **out_data) {
-    GltfIo const *io = require_gltf_io("parse_file");
-    if (!io->parse_file) {
-        throw std::runtime_error("m3g glTF I/O: parse_file callback not set");
-    }
-    const int rc = io->parse_file(path, out_data, io->user);
-    if (rc != GLTF_IO_OK) {
-        throw std::runtime_error(std::string("m3g glTF I/O: parse_file failed (rc ") + std::to_string(rc) +
-                                 ") for " + path);
-    }
-}
+void gltf_validate(void *data);
 
-inline void gltf_validate(void *data) {
-    GltfIo const *io = require_gltf_io("validate");
-    if (!io->validate) {
-        throw std::runtime_error("m3g glTF I/O: validate callback not set");
-    }
-    const int rc = io->validate(data, io->user);
-    if (rc != GLTF_IO_OK) {
-        throw std::runtime_error(std::string("m3g glTF I/O: validate failed (rc ") + std::to_string(rc) + ")");
-    }
-}
-
-inline void gltf_free_data(void *data) {
-    if (!data) {
-        return;
-    }
-    GltfIo const *io = require_gltf_io("free_data");
-    if (!io->free_data) {
-        throw std::runtime_error("m3g glTF I/O: free_data callback not set");
-    }
-    io->free_data(data, io->user);
-}
+void gltf_free_data(void *data);
 /** @} */
 
-inline JsonIo const *require_json_io(char const *what) {
-    JsonIo const *io = json_io();
-    if (!io) {
-        throw std::runtime_error(std::string("m3g JSON I/O: not set (need ") + what +
-                                 "; call m3g::set_json_io or install_cjson_json_io)");
-    }
-    return io;
-}
-
-inline void *json_create_object() {
-    JsonIo const *io = require_json_io("create_object");
-    if (!io->create_object) {
-        throw std::runtime_error("m3g JSON I/O: create_object callback not set");
-    }
-    return io->create_object(io->user);
-}
-inline void *json_create_array() {
-    JsonIo const *io = require_json_io("create_array");
-    if (!io->create_array) {
-        throw std::runtime_error("m3g JSON I/O: create_array callback not set");
-    }
-    return io->create_array(io->user);
-}
-inline void *json_create_string(char const *s) {
-    JsonIo const *io = require_json_io("create_string");
-    if (!io->create_string) {
-        throw std::runtime_error("m3g JSON I/O: create_string callback not set");
-    }
-    return io->create_string(s, io->user);
-}
-inline void *json_create_number(double v) {
-    JsonIo const *io = require_json_io("create_number");
-    if (!io->create_number) {
-        throw std::runtime_error("m3g JSON I/O: create_number callback not set");
-    }
-    return io->create_number(v, io->user);
-}
-inline void *json_create_bool(int v) {
-    JsonIo const *io = require_json_io("create_bool");
-    if (!io->create_bool) {
-        throw std::runtime_error("m3g JSON I/O: create_bool callback not set");
-    }
-    return io->create_bool(v, io->user);
-}
-inline void json_add_item_to_object(void *object, char const *key, void *item) {
-    JsonIo const *io = require_json_io("add_item_to_object");
-    if (!io->add_item_to_object) {
-        throw std::runtime_error("m3g JSON I/O: add_item_to_object callback not set");
-    }
-    io->add_item_to_object(object, key, item, io->user);
-}
-inline void json_add_item_to_array(void *array, void *item) {
-    JsonIo const *io = require_json_io("add_item_to_array");
-    if (!io->add_item_to_array) {
-        throw std::runtime_error("m3g JSON I/O: add_item_to_array callback not set");
-    }
-    io->add_item_to_array(array, item, io->user);
-}
-inline int json_get_array_size(void const *array) {
-    JsonIo const *io = require_json_io("get_array_size");
-    if (!io->get_array_size) {
-        throw std::runtime_error("m3g JSON I/O: get_array_size callback not set");
-    }
-    return io->get_array_size(array, io->user);
-}
-inline void json_delete(void *node) {
-    if (!node) {
-        return;
-    }
-    JsonIo const *io = require_json_io("delete_node");
-    if (!io->delete_node) {
-        throw std::runtime_error("m3g JSON I/O: delete_node callback not set");
-    }
-    io->delete_node(node, io->user);
-}
-inline char *json_print_unformatted(void *node) {
-    JsonIo const *io = require_json_io("print_unformatted");
-    if (!io->print_unformatted) {
-        throw std::runtime_error("m3g JSON I/O: print_unformatted callback not set");
-    }
-    return io->print_unformatted(node, io->user);
-}
-inline char *json_print_formatted(void *node) {
-    JsonIo const *io = require_json_io("print_formatted");
-    if (!io->print_formatted) {
-        throw std::runtime_error("m3g JSON I/O: print_formatted callback not set");
-    }
-    return io->print_formatted(node, io->user);
-}
-inline void json_free_print(char *printed) {
-    if (!printed) {
-        return;
-    }
-    JsonIo const *io = require_json_io("free_print");
-    if (!io->free_print) {
-        throw std::runtime_error("m3g JSON I/O: free_print callback not set");
-    }
-    io->free_print(printed, io->user);
-}
+void *json_create_object();
+void *json_create_array();
+void *json_create_string(char const *s);
+void *json_create_number(double v);
+void *json_create_bool(int v);
+void json_add_item_to_object(void *object, char const *key, void *item);
+void json_add_item_to_array(void *array, void *item);
+int json_get_array_size(void const *array);
+void json_delete(void *node);
+char *json_print_unformatted(void *node);
+char *json_print_formatted(void *node);
+void json_free_print(char *printed);
 
 /**
  * @ingroup m3g_model
@@ -660,60 +479,7 @@ struct KeyframeInterpolation {
  * @ingroup m3g_model
  * @brief Human-readable name for an @ref ObjectTypes value.
  */
-inline std::string type_name_for_object_type(int object_type) {
-    switch (object_type) {
-    case ObjectTypes::HEADER:
-        return "Header";
-    case ObjectTypes::ANIMATION_CONTROLLER:
-        return "AnimationController";
-    case ObjectTypes::ANIMATION_TRACK:
-        return "AnimationTrack";
-    case ObjectTypes::APPEARANCE:
-        return "Appearance";
-    case ObjectTypes::BACKGROUND:
-        return "Background";
-    case ObjectTypes::CAMERA:
-        return "Camera";
-    case ObjectTypes::COMPOSITING_MODE:
-        return "CompositingMode";
-    case ObjectTypes::FOG:
-        return "Fog";
-    case ObjectTypes::POLYGON_MODE:
-        return "PolygonMode";
-    case ObjectTypes::GROUP:
-        return "Group";
-    case ObjectTypes::IMAGE_2D:
-        return "Image2D";
-    case ObjectTypes::TRIANGLE_STRIP_ARRAY:
-        return "TriangleStripArray";
-    case ObjectTypes::LIGHT:
-        return "Light";
-    case ObjectTypes::MATERIAL:
-        return "Material";
-    case ObjectTypes::MESH:
-        return "Mesh";
-    case ObjectTypes::MORPHING_MESH:
-        return "MorphingMesh";
-    case ObjectTypes::SKINNED_MESH:
-        return "SkinnedMesh";
-    case ObjectTypes::TEXTURE_2D:
-        return "Texture2D";
-    case ObjectTypes::SPRITE_3D:
-        return "Sprite3D";
-    case ObjectTypes::KEYFRAME_SEQUENCE:
-        return "KeyframeSequence";
-    case ObjectTypes::VERTEX_ARRAY:
-        return "VertexArray";
-    case ObjectTypes::VERTEX_BUFFER:
-        return "VertexBuffer";
-    case ObjectTypes::WORLD:
-        return "World";
-    case ObjectTypes::EXTERNAL_REFERENCE:
-        return "ExternalReference";
-    default:
-        return "Type" + std::to_string(object_type);
-    }
-}
+std::string type_name_for_object_type(int object_type);
 
 /**
  * @brief 8-bit RGB color.
@@ -1259,20 +1025,7 @@ struct File {
     }
 };
 
-inline bool is_identity_row_major(const std::vector<float> &m, float epsilon = 1e-5f) {
-    static const float identity[16] = {
-        1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-    };
-    if (m.size() != 16) {
-        return false;
-    }
-    for (int i = 0; i < 16; ++i) {
-        if (std::fabs(m[static_cast<std::size_t>(i)] - identity[i]) > epsilon) {
-            return false;
-        }
-    }
-    return true;
-}
+bool is_identity_row_major(const std::vector<float> &m, float epsilon = 1e-5f);
 
 } // namespace model
 
@@ -1635,96 +1388,6 @@ public:
 } // namespace m3g
 
 
-/* ---- deflate + image + JSON I/O state ---- */
-namespace m3g {
-
-inline DeflateIo &deflate_io_storage() {
-    static DeflateIo storage{};
-    return storage;
-}
-
-inline void set_deflate_io(DeflateIo const *io) {
-    if (!io) {
-        deflate_io_storage() = DeflateIo{};
-        return;
-    }
-    deflate_io_storage() = *io;
-}
-
-inline DeflateIo const *deflate_io(void) {
-    DeflateIo const &s = deflate_io_storage();
-    if (!s.adler32 && !s.uncompress && !s.uncompress_to_heap && !s.free_mem) {
-        return nullptr;
-    }
-    return &s;
-}
-
-inline ImageIo &image_io_storage() {
-    static ImageIo storage{};
-    return storage;
-}
-
-inline void set_image_io(ImageIo const *io) {
-    if (!io) {
-        image_io_storage() = ImageIo{};
-        return;
-    }
-    image_io_storage() = *io;
-}
-
-inline ImageIo const *image_io(void) {
-    ImageIo const &s = image_io_storage();
-    if (!s.load_file && !s.load_memory && !s.free_pixels) {
-        return nullptr;
-    }
-    return &s;
-}
-
-inline JsonIo &json_io_storage() {
-    static JsonIo storage{};
-    return storage;
-}
-
-inline void set_json_io(JsonIo const *io) {
-    if (!io) {
-        json_io_storage() = JsonIo{};
-        return;
-    }
-    json_io_storage() = *io;
-}
-
-inline JsonIo const *json_io(void) {
-    JsonIo const &s = json_io_storage();
-    if (!s.create_object && !s.create_array && !s.create_string && !s.create_number && !s.create_bool &&
-        !s.add_item_to_object && !s.add_item_to_array && !s.get_array_size && !s.delete_node &&
-        !s.print_unformatted && !s.print_formatted && !s.free_print) {
-        return nullptr;
-    }
-    return &s;
-}
-
-inline GltfIo &gltf_io_storage() {
-    static GltfIo storage{};
-    return storage;
-}
-
-inline void set_gltf_io(GltfIo const *io) {
-    if (!io) {
-        gltf_io_storage() = GltfIo{};
-        return;
-    }
-    gltf_io_storage() = *io;
-}
-
-inline GltfIo const *gltf_io(void) {
-    GltfIo const &s = gltf_io_storage();
-    if (!s.write_file && !s.parse_file && !s.validate && !s.free_data) {
-        return nullptr;
-    }
-    return &s;
-}
-
-} // namespace m3g
 
 /* ---- always-available matrix helpers (used by decode impl + glTF export) ---- */
 #ifndef M3G_MATRIX_UTIL_INCLUDED
@@ -1742,13 +1405,477 @@ inline GltfIo const *gltf_io(void) {
 namespace m3g {
 namespace scene {
 
-inline std::vector<float> identity_matrix_row_major() {
+std::vector<float> identity_matrix_row_major();
+
+std::vector<float> multiply_row_major(const std::vector<float> &left, const std::vector<float> &right);
+
+std::vector<float> translation_matrix_row_major(float x, float y, float z);
+
+std::vector<float> scale_matrix_row_major(float x, float y, float z);
+
+std::vector<float> axis_angle_matrix_row_major(float angle_radians, float axis_x, float axis_y, float axis_z);
+
+std::vector<float> component_transform_to_row_major(const model::ComponentTransform &component);
+
+std::vector<float> node_matrix_row_major(const model::NodeMeta &node_meta);
+
+struct DecomposedTrs {
+    std::vector<float> translation{0.f, 0.f, 0.f};
+    std::vector<float> rotation{0.f, 0.f, 0.f, 1.f}; // xyzw
+    std::vector<float> scale{1.f, 1.f, 1.f};
+};
+
+float vec3_length(float x, float y, float z);
+
+std::vector<float> quaternion_from_axis_angle_degrees(float angle_degrees, float ax, float ay, float az);
+
+std::vector<float> quaternion_from_row_major_rotation(const float r[3][3]);
+
+DecomposedTrs decompose_row_major_trs(const std::vector<float> &matrix);
+
+std::vector<double> row_major_to_column_major_list(const std::vector<float> &matrix);
+
+} // namespace scene
+} // namespace m3g
+
+#endif /* M3G_MATRIX_UTIL_INCLUDED */
+
+#endif /* M3G_HPP_INCLUDED */
+
+/* ============================ IMPLEMENTATION ============================ */
+#ifdef M3G_DECODE_IMPL
+#ifndef M3G_DECODE_IMPL_INCLUDED
+#define M3G_DECODE_IMPL_INCLUDED
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+#include <map>
+#include <set>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
+#include <string>
+#include <optional>
+#include <cstdint>
+
+
+/* ---- non-inline helpers (M3G_IMPL / M3G_DECODE_IMPL) ---- */
+namespace m3g {
+
+namespace {
+
+static DeflateIo &deflate_io_storage(){
+    static DeflateIo storage{};
+    return storage;
+}
+
+static ImageIo &image_io_storage(){
+    static ImageIo storage{};
+    return storage;
+}
+
+static JsonIo &json_io_storage(){
+    static JsonIo storage{};
+    return storage;
+}
+
+static GltfIo &gltf_io_storage(){
+    static GltfIo storage{};
+    return storage;
+}
+
+} // namespace
+
+std::uint32_t deflate_adler32(std::uint32_t adler, unsigned char const *ptr, std::size_t buf_len){
+    DeflateIo const *io = deflate_io();
+    if (!io || !io->adler32) {
+        throw std::runtime_error("m3g deflate I/O: adler32 callback not set (call m3g::set_deflate_io or install_miniz_deflate_io)");
+    }
+    return io->adler32(adler, ptr, buf_len, io->user);
+}
+
+int deflate_uncompress(unsigned char *dest, std::size_t *dest_len, unsigned char const *source,
+                              std::size_t source_len){
+    DeflateIo const *io = deflate_io();
+    if (!io || !io->uncompress) {
+        throw std::runtime_error("m3g deflate I/O: uncompress callback not set (call m3g::set_deflate_io or install_miniz_deflate_io)");
+    }
+    return io->uncompress(dest, dest_len, source, source_len, io->user);
+}
+
+void *deflate_uncompress_to_heap(unsigned char const *source, std::size_t source_len, std::size_t *out_len,
+                                        int zlib_header){
+    DeflateIo const *io = deflate_io();
+    if (!io || !io->uncompress_to_heap) {
+        throw std::runtime_error("m3g deflate I/O: uncompress_to_heap callback not set (call m3g::set_deflate_io or install_miniz_deflate_io)");
+    }
+    return io->uncompress_to_heap(source, source_len, out_len, zlib_header, io->user);
+}
+
+void deflate_free(void *p){
+    if (!p) {
+        return;
+    }
+    DeflateIo const *io = deflate_io();
+    if (!io || !io->free_mem) {
+        throw std::runtime_error("m3g deflate I/O: free_mem callback not set");
+    }
+    io->free_mem(p, io->user);
+}
+
+unsigned char *image_load_file(char const *filename, int *width, int *height, int *channels_in_file,
+                                     int req_comp){
+    ImageIo const *io = image_io();
+    if (!io || !io->load_file) {
+        throw std::runtime_error("m3g image I/O: load_file callback not set (call m3g::set_image_io or install_stb_image_io)");
+    }
+    return io->load_file(filename, width, height, channels_in_file, req_comp, io->user);
+}
+
+unsigned char *image_load_memory(unsigned char const *buffer, int len, int *width, int *height,
+                                       int *channels_in_file, int req_comp){
+    ImageIo const *io = image_io();
+    if (!io || !io->load_memory) {
+        throw std::runtime_error("m3g image I/O: load_memory callback not set (call m3g::set_image_io or install_stb_image_io)");
+    }
+    return io->load_memory(buffer, len, width, height, channels_in_file, req_comp, io->user);
+}
+
+void image_free_pixels(void *pixels){
+    if (!pixels) {
+        return;
+    }
+    ImageIo const *io = image_io();
+    if (!io || !io->free_pixels) {
+        throw std::runtime_error("m3g image I/O: free_pixels callback not set");
+    }
+    io->free_pixels(pixels, io->user);
+}
+
+static GltfIo const *require_gltf_io(char const *what){
+    GltfIo const *io = gltf_io();
+    if (!io) {
+        throw std::runtime_error(std::string("m3g glTF I/O: not set (need ") + what +
+                                 "; call m3g::set_gltf_io or install_cgltf_gltf_io)");
+    }
+    return io;
+}
+
+void gltf_write_file(char const *path, void const *data, int kind){
+    GltfIo const *io = require_gltf_io("write_file");
+    if (!io->write_file) {
+        throw std::runtime_error("m3g glTF I/O: write_file callback not set");
+    }
+    const int rc = io->write_file(path, data, kind, io->user);
+    if (rc != GLTF_IO_OK) {
+        throw std::runtime_error(std::string("m3g glTF I/O: write_file failed (rc ") + std::to_string(rc) +
+                                 ") for " + path);
+    }
+}
+
+void gltf_parse_file(char const *path, void **out_data){
+    GltfIo const *io = require_gltf_io("parse_file");
+    if (!io->parse_file) {
+        throw std::runtime_error("m3g glTF I/O: parse_file callback not set");
+    }
+    const int rc = io->parse_file(path, out_data, io->user);
+    if (rc != GLTF_IO_OK) {
+        throw std::runtime_error(std::string("m3g glTF I/O: parse_file failed (rc ") + std::to_string(rc) +
+                                 ") for " + path);
+    }
+}
+
+void gltf_validate(void *data){
+    GltfIo const *io = require_gltf_io("validate");
+    if (!io->validate) {
+        throw std::runtime_error("m3g glTF I/O: validate callback not set");
+    }
+    const int rc = io->validate(data, io->user);
+    if (rc != GLTF_IO_OK) {
+        throw std::runtime_error(std::string("m3g glTF I/O: validate failed (rc ") + std::to_string(rc) + ")");
+    }
+}
+
+void gltf_free_data(void *data){
+    if (!data) {
+        return;
+    }
+    GltfIo const *io = require_gltf_io("free_data");
+    if (!io->free_data) {
+        throw std::runtime_error("m3g glTF I/O: free_data callback not set");
+    }
+    io->free_data(data, io->user);
+}
+
+static JsonIo const *require_json_io(char const *what){
+    JsonIo const *io = json_io();
+    if (!io) {
+        throw std::runtime_error(std::string("m3g JSON I/O: not set (need ") + what +
+                                 "; call m3g::set_json_io or install_cjson_json_io)");
+    }
+    return io;
+}
+
+void *json_create_object(){
+    JsonIo const *io = require_json_io("create_object");
+    if (!io->create_object) {
+        throw std::runtime_error("m3g JSON I/O: create_object callback not set");
+    }
+    return io->create_object(io->user);
+}
+
+void *json_create_array(){
+    JsonIo const *io = require_json_io("create_array");
+    if (!io->create_array) {
+        throw std::runtime_error("m3g JSON I/O: create_array callback not set");
+    }
+    return io->create_array(io->user);
+}
+
+void *json_create_string(char const *s){
+    JsonIo const *io = require_json_io("create_string");
+    if (!io->create_string) {
+        throw std::runtime_error("m3g JSON I/O: create_string callback not set");
+    }
+    return io->create_string(s, io->user);
+}
+
+void *json_create_number(double v){
+    JsonIo const *io = require_json_io("create_number");
+    if (!io->create_number) {
+        throw std::runtime_error("m3g JSON I/O: create_number callback not set");
+    }
+    return io->create_number(v, io->user);
+}
+
+void *json_create_bool(int v){
+    JsonIo const *io = require_json_io("create_bool");
+    if (!io->create_bool) {
+        throw std::runtime_error("m3g JSON I/O: create_bool callback not set");
+    }
+    return io->create_bool(v, io->user);
+}
+
+void json_add_item_to_object(void *object, char const *key, void *item){
+    JsonIo const *io = require_json_io("add_item_to_object");
+    if (!io->add_item_to_object) {
+        throw std::runtime_error("m3g JSON I/O: add_item_to_object callback not set");
+    }
+    io->add_item_to_object(object, key, item, io->user);
+}
+
+void json_add_item_to_array(void *array, void *item){
+    JsonIo const *io = require_json_io("add_item_to_array");
+    if (!io->add_item_to_array) {
+        throw std::runtime_error("m3g JSON I/O: add_item_to_array callback not set");
+    }
+    io->add_item_to_array(array, item, io->user);
+}
+
+int json_get_array_size(void const *array){
+    JsonIo const *io = require_json_io("get_array_size");
+    if (!io->get_array_size) {
+        throw std::runtime_error("m3g JSON I/O: get_array_size callback not set");
+    }
+    return io->get_array_size(array, io->user);
+}
+
+void json_delete(void *node){
+    if (!node) {
+        return;
+    }
+    JsonIo const *io = require_json_io("delete_node");
+    if (!io->delete_node) {
+        throw std::runtime_error("m3g JSON I/O: delete_node callback not set");
+    }
+    io->delete_node(node, io->user);
+}
+
+char *json_print_unformatted(void *node){
+    JsonIo const *io = require_json_io("print_unformatted");
+    if (!io->print_unformatted) {
+        throw std::runtime_error("m3g JSON I/O: print_unformatted callback not set");
+    }
+    return io->print_unformatted(node, io->user);
+}
+
+char *json_print_formatted(void *node){
+    JsonIo const *io = require_json_io("print_formatted");
+    if (!io->print_formatted) {
+        throw std::runtime_error("m3g JSON I/O: print_formatted callback not set");
+    }
+    return io->print_formatted(node, io->user);
+}
+
+void json_free_print(char *printed){
+    if (!printed) {
+        return;
+    }
+    JsonIo const *io = require_json_io("free_print");
+    if (!io->free_print) {
+        throw std::runtime_error("m3g JSON I/O: free_print callback not set");
+    }
+    io->free_print(printed, io->user);
+}
+
+void set_deflate_io(DeflateIo const *io){
+    if (!io) {
+        deflate_io_storage() = DeflateIo{};
+        return;
+    }
+    deflate_io_storage() = *io;
+}
+
+DeflateIo const *deflate_io(void){
+    DeflateIo const &s = deflate_io_storage();
+    if (!s.adler32 && !s.uncompress && !s.uncompress_to_heap && !s.free_mem) {
+        return nullptr;
+    }
+    return &s;
+}
+
+void set_image_io(ImageIo const *io){
+    if (!io) {
+        image_io_storage() = ImageIo{};
+        return;
+    }
+    image_io_storage() = *io;
+}
+
+ImageIo const *image_io(void){
+    ImageIo const &s = image_io_storage();
+    if (!s.load_file && !s.load_memory && !s.free_pixels) {
+        return nullptr;
+    }
+    return &s;
+}
+
+void set_json_io(JsonIo const *io){
+    if (!io) {
+        json_io_storage() = JsonIo{};
+        return;
+    }
+    json_io_storage() = *io;
+}
+
+JsonIo const *json_io(void){
+    JsonIo const &s = json_io_storage();
+    if (!s.create_object && !s.create_array && !s.create_string && !s.create_number && !s.create_bool &&
+        !s.add_item_to_object && !s.add_item_to_array && !s.get_array_size && !s.delete_node &&
+        !s.print_unformatted && !s.print_formatted && !s.free_print) {
+        return nullptr;
+    }
+    return &s;
+}
+
+void set_gltf_io(GltfIo const *io){
+    if (!io) {
+        gltf_io_storage() = GltfIo{};
+        return;
+    }
+    gltf_io_storage() = *io;
+}
+
+GltfIo const *gltf_io(void){
+    GltfIo const &s = gltf_io_storage();
+    if (!s.write_file && !s.parse_file && !s.validate && !s.free_data) {
+        return nullptr;
+    }
+    return &s;
+}
+
+namespace model {
+
+std::string type_name_for_object_type(int object_type){
+    switch (object_type) {
+    case ObjectTypes::HEADER:
+        return "Header";
+    case ObjectTypes::ANIMATION_CONTROLLER:
+        return "AnimationController";
+    case ObjectTypes::ANIMATION_TRACK:
+        return "AnimationTrack";
+    case ObjectTypes::APPEARANCE:
+        return "Appearance";
+    case ObjectTypes::BACKGROUND:
+        return "Background";
+    case ObjectTypes::CAMERA:
+        return "Camera";
+    case ObjectTypes::COMPOSITING_MODE:
+        return "CompositingMode";
+    case ObjectTypes::FOG:
+        return "Fog";
+    case ObjectTypes::POLYGON_MODE:
+        return "PolygonMode";
+    case ObjectTypes::GROUP:
+        return "Group";
+    case ObjectTypes::IMAGE_2D:
+        return "Image2D";
+    case ObjectTypes::TRIANGLE_STRIP_ARRAY:
+        return "TriangleStripArray";
+    case ObjectTypes::LIGHT:
+        return "Light";
+    case ObjectTypes::MATERIAL:
+        return "Material";
+    case ObjectTypes::MESH:
+        return "Mesh";
+    case ObjectTypes::MORPHING_MESH:
+        return "MorphingMesh";
+    case ObjectTypes::SKINNED_MESH:
+        return "SkinnedMesh";
+    case ObjectTypes::TEXTURE_2D:
+        return "Texture2D";
+    case ObjectTypes::SPRITE_3D:
+        return "Sprite3D";
+    case ObjectTypes::KEYFRAME_SEQUENCE:
+        return "KeyframeSequence";
+    case ObjectTypes::VERTEX_ARRAY:
+        return "VertexArray";
+    case ObjectTypes::VERTEX_BUFFER:
+        return "VertexBuffer";
+    case ObjectTypes::WORLD:
+        return "World";
+    case ObjectTypes::EXTERNAL_REFERENCE:
+        return "ExternalReference";
+    default:
+        return "Type" + std::to_string(object_type);
+    }
+}
+
+bool is_identity_row_major(const std::vector<float> &m, float epsilon ){
+    static const float identity[16] = {
+        1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+    };
+    if (m.size() != 16) {
+        return false;
+    }
+    for (int i = 0; i < 16; ++i) {
+        if (std::fabs(m[static_cast<std::size_t>(i)] - identity[i]) > epsilon) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace model
+
+namespace scene {
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+std::vector<float> identity_matrix_row_major(){
     return {
         1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f,
     };
 }
 
-inline std::vector<float> multiply_row_major(const std::vector<float> &left, const std::vector<float> &right) {
+std::vector<float> multiply_row_major(const std::vector<float> &left, const std::vector<float> &right){
     if (left.size() != 16 || right.size() != 16) {
         throw std::invalid_argument("Matrix multiplication expects 4x4 matrices");
     }
@@ -1766,7 +1893,7 @@ inline std::vector<float> multiply_row_major(const std::vector<float> &left, con
     return result;
 }
 
-inline std::vector<float> translation_matrix_row_major(float x, float y, float z) {
+std::vector<float> translation_matrix_row_major(float x, float y, float z){
     auto m = identity_matrix_row_major();
     m[3] = x;
     m[7] = y;
@@ -1774,13 +1901,13 @@ inline std::vector<float> translation_matrix_row_major(float x, float y, float z
     return m;
 }
 
-inline std::vector<float> scale_matrix_row_major(float x, float y, float z) {
+std::vector<float> scale_matrix_row_major(float x, float y, float z){
     return {
         x, 0.f, 0.f, 0.f, 0.f, y, 0.f, 0.f, 0.f, 0.f, z, 0.f, 0.f, 0.f, 0.f, 1.f,
     };
 }
 
-inline std::vector<float> axis_angle_matrix_row_major(float angle_radians, float axis_x, float axis_y, float axis_z) {
+std::vector<float> axis_angle_matrix_row_major(float angle_radians, float axis_x, float axis_y, float axis_z){
     const float length = std::sqrt(axis_x * axis_x + axis_y * axis_y + axis_z * axis_z);
     if (length < 1e-6f || angle_radians == 0.f) {
         return identity_matrix_row_major();
@@ -1797,7 +1924,7 @@ inline std::vector<float> axis_angle_matrix_row_major(float angle_radians, float
     };
 }
 
-inline std::vector<float> component_transform_to_row_major(const model::ComponentTransform &component) {
+std::vector<float> component_transform_to_row_major(const model::ComponentTransform &component){
     const auto translation =
         translation_matrix_row_major(component.translation[0], component.translation[1], component.translation[2]);
     const auto rotation = axis_angle_matrix_row_major(component.orientation_angle, component.orientation_axis[0],
@@ -1806,7 +1933,7 @@ inline std::vector<float> component_transform_to_row_major(const model::Componen
     return multiply_row_major(translation, multiply_row_major(rotation, scale));
 }
 
-inline std::vector<float> node_matrix_row_major(const model::NodeMeta &node_meta) {
+std::vector<float> node_matrix_row_major(const model::NodeMeta &node_meta){
     if (node_meta.transformable.general_transform) {
         return *node_meta.transformable.general_transform;
     }
@@ -1816,15 +1943,9 @@ inline std::vector<float> node_matrix_row_major(const model::NodeMeta &node_meta
     return identity_matrix_row_major();
 }
 
-struct DecomposedTrs {
-    std::vector<float> translation{0.f, 0.f, 0.f};
-    std::vector<float> rotation{0.f, 0.f, 0.f, 1.f}; // xyzw
-    std::vector<float> scale{1.f, 1.f, 1.f};
-};
+float vec3_length(float x, float y, float z){ return std::sqrt(x * x + y * y + z * z); }
 
-inline float vec3_length(float x, float y, float z) { return std::sqrt(x * x + y * y + z * z); }
-
-inline std::vector<float> quaternion_from_axis_angle_degrees(float angle_degrees, float ax, float ay, float az) {
+std::vector<float> quaternion_from_axis_angle_degrees(float angle_degrees, float ax, float ay, float az){
     const float len = vec3_length(ax, ay, az);
     if (len < 1e-8f || std::abs(angle_degrees) < 1e-8f) {
         return {0.f, 0.f, 0.f, 1.f};
@@ -1835,7 +1956,7 @@ inline std::vector<float> quaternion_from_axis_angle_degrees(float angle_degrees
     return {ax / len * s, ay / len * s, az / len * s, c};
 }
 
-inline std::vector<float> quaternion_from_row_major_rotation(const float r[3][3]) {
+std::vector<float> quaternion_from_row_major_rotation(const float r[3][3]){
     const float trace = r[0][0] + r[1][1] + r[2][2];
     float x, y, z, w;
     if (trace > 0.f) {
@@ -1870,7 +1991,7 @@ inline std::vector<float> quaternion_from_row_major_rotation(const float r[3][3]
     return {x / qlen, y / qlen, z / qlen, w / qlen};
 }
 
-inline DecomposedTrs decompose_row_major_trs(const std::vector<float> &matrix) {
+DecomposedTrs decompose_row_major_trs(const std::vector<float> &matrix){
     DecomposedTrs out;
     if (matrix.size() != 16) {
         return out;
@@ -1904,7 +2025,7 @@ inline DecomposedTrs decompose_row_major_trs(const std::vector<float> &matrix) {
     return out;
 }
 
-inline std::vector<double> row_major_to_column_major_list(const std::vector<float> &matrix) {
+std::vector<double> row_major_to_column_major_list(const std::vector<float> &matrix){
     if (matrix.size() != 16) {
         throw std::invalid_argument("Expected a 4x4 matrix");
     }
@@ -1915,32 +2036,8 @@ inline std::vector<double> row_major_to_column_major_list(const std::vector<floa
 }
 
 } // namespace scene
+
 } // namespace m3g
-
-#endif /* M3G_MATRIX_UTIL_INCLUDED */
-
-#endif /* M3G_HPP_INCLUDED */
-
-/* ============================ IMPLEMENTATION ============================ */
-#ifdef M3G_DECODE_IMPL
-#ifndef M3G_DECODE_IMPL_INCLUDED
-#define M3G_DECODE_IMPL_INCLUDED
-
-#include <algorithm>
-#include <cctype>
-#include <cmath>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <limits>
-#include <map>
-#include <set>
-#include <stdexcept>
-#include <tuple>
-#include <vector>
-#include <string>
-#include <optional>
-#include <cstdint>
 
 /* internal: BinaryReader */
 
@@ -1952,6 +2049,7 @@ inline std::vector<double> row_major_to_column_major_list(const std::vector<floa
 
 namespace m3g {
 namespace model {
+namespace { // private
 
 class BinaryReader {
 public:
@@ -2062,6 +2160,7 @@ private:
     std::vector<std::vector<std::uint8_t>> owned_chunks_;
 };
 
+} // namespace
 } // namespace model
 } // namespace m3g
 
@@ -2073,6 +2172,7 @@ private:
 
 namespace m3g {
 namespace model {
+namespace { // private
 
 class Parser {
 public:
@@ -2080,6 +2180,7 @@ public:
     File parse(const std::vector<std::uint8_t> &bytes) const;
 };
 
+} // namespace
 } // namespace model
 } // namespace m3g
 
@@ -2092,6 +2193,8 @@ public:
 
 namespace m3g {
 namespace model {
+namespace { // private
+
 namespace {
 
 const std::uint8_t FILE_IDENTIFIER[12] = {
@@ -2791,6 +2894,7 @@ File Parser::parse(const std::vector<std::uint8_t> &bytes) const {
     return file;
 }
 
+} // namespace
 } // namespace model
 } // namespace m3g
 
@@ -2801,6 +2905,7 @@ File Parser::parse(const std::vector<std::uint8_t> &bytes) const {
 
 namespace m3g {
 namespace scene {
+namespace { // private
 
 class SceneBuilder {
 public:
@@ -2813,6 +2918,7 @@ private:
     std::string input_path_;
 };
 
+} // namespace
 } // namespace scene
 } // namespace m3g
 
@@ -2833,6 +2939,8 @@ private:
 
 namespace m3g {
 namespace scene {
+namespace { // private
+
 namespace {
 
 struct SamplerKey {
@@ -3980,6 +4088,7 @@ SceneIr SceneBuilder::build() {
     return impl.build();
 }
 
+} // namespace
 } // namespace scene
 } // namespace m3g
 
@@ -3991,11 +4100,13 @@ SceneIr SceneBuilder::build() {
 
 namespace m3g {
 namespace scene {
+namespace { // private
 
 struct PatternTextureAttacher {
     static SceneIr auto_attach(const SceneIr &scene, const std::optional<std::string> &pattern_path);
 };
 
+} // namespace
 } // namespace scene
 } // namespace m3g
 
@@ -4009,6 +4120,8 @@ struct PatternTextureAttacher {
 
 namespace m3g {
 namespace scene {
+namespace { // private
+
 namespace {
 
 constexpr float UV_EPSILON = 1e-6f;
@@ -4147,6 +4260,7 @@ SceneIr PatternTextureAttacher::auto_attach(const SceneIr &scene, const std::opt
     return out;
 }
 
+} // namespace
 } // namespace scene
 } // namespace m3g
 
