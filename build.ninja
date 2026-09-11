@@ -1,34 +1,64 @@
 # m3g — M3G decoder / glTF converter (C++17)
-# Ninja translation of Makefile
+# Single-file Ninja build (Linux + Windows/MinGW). No conf.ninja / configure.
 #
 # Build:
-#   ninja            # viewer -> build/debug  (sokol)
+#   ninja            # viewer -> build/debug[$exe]  (sokol)
 #   ninja debug      # same
 #   ninja view       # same as debug
-#   ninja release    # CLI    -> build/m3g
+#   ninja release    # CLI    -> build/m3g[$exe]
 #   ninja -t clean
 #
 # Viewer:
-#   ./build/debug assets/90.m3g
+#   ./build/debug assets/90.m3g          # Linux
+#   build\debug.exe assets\90.m3g        # Windows (after win overrides)
 #
-# Vendored headers:
-#   ninja setup
+# Vendored headers:  ninja setup
+# Tests:             ninja test
+#                    n=1,2 s=10 ninja test   (cmd: set n=1&& ninja test)
 #
-# Tests:
-#   ninja test
-#   ninja test  - or pass filters via env: n=1,2 s=10 ninja test-run
+# Object files under build/obj/<config>/ so build/debug can be the binary.
 #
-# Object files live under build/obj/<config>/ so build/debug can be the binary.
+# --- Platform ---
+# Defaults below are Linux. Ninja has no if/OS, so on Windows/MinGW either:
+#   1) Uncomment the "Windows MinGW overrides" block, OR
+#   2) Pass on the CLI, e.g.:
+#        ninja release exe=.exe cxx=g++ view_libs="-lm -lopengl32 -lgdi32" posix_cppflags= py=python
+#
+# Setup/test recipes use Python scripts (OS-portable). Needs python3 (or py=python).
 
 ninja_required_version = 1.5
 
+# ---------------------------------------------------------------------------
+# Toolchain / platform (Linux defaults)
+# ---------------------------------------------------------------------------
+
+exe =
 cxx = c++
 cc = gcc
+test_cc = gcc
+py = python3
+
 app = m3g
 buildroot = build
 srcdir = src
 incdir = include
 test_bindir = tests/bin
+
+app_libs = -lm
+# Sokol GLCORE viewer — Linux X11
+view_libs = $app_libs -lGL -lX11 -lXi -lXcursor -ldl -lpthread
+# glibc/musl feature macros for vendored C
+posix_cppflags = -D_DEFAULT_SOURCE
+
+# --- Windows MinGW overrides (uncomment all lines in this block) ---
+# exe = .exe
+# cxx = g++
+# cc = gcc
+# test_cc = gcc
+# py = python
+# app_libs = -lm
+# view_libs = $app_libs -lopengl32 -lgdi32
+# posix_cppflags =
 
 miniz_tag = 3.1.2
 miniz_url = https://github.com/richgel999/miniz/releases/download/${miniz_tag}/miniz-${miniz_tag}.zip
@@ -45,20 +75,11 @@ imgui_stamp = ${imgui_dir}/.extracted
 app_cppflags = -I. -I${incdir} -I${srcdir} -Ivendors -Ivendors/cgltf -Ivendors/libs -Ivendors/miniz
 view_cppflags = $app_cppflags -Ivendors/imgui
 app_ldflags =
-app_libs = -lm
-view_libs = $app_libs -lGL -lX11 -lXi -lXcursor -ldl -lpthread
 
-cxxflags_debug = -std=c++17 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE -DAPP_NAME=\"${app}\"
-cxxflags_release = -std=c++17 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE -DAPP_NAME=\"${app}\"
-cflags_debug = -std=c99 -Wall -Wextra -O0 -g -D_DEFAULT_SOURCE
-cflags_release = -std=c99 -Wall -Wextra -Os -g0 -DNDEBUG -D_DEFAULT_SOURCE
-
-test_cflags = -std=c99 -Wall -Wextra -g -D_DEFAULT_SOURCE
-test_includes = -I. -Iinclude -Ivendors/libs
-test_impl = tests/impl.c
-
-# Prefer musl-gcc for tests when available (matches Makefile).
-test_cc = gcc
+cxxflags_debug = -std=c++17 -Wall -Wextra -O0 -g $posix_cppflags -DAPP_NAME=\"${app}\"
+cxxflags_release = -std=c++17 -Wall -Wextra -Os -g0 -DNDEBUG $posix_cppflags -DAPP_NAME=\"${app}\"
+cflags_debug = -std=c99 -Wall -Wextra -O0 -g $posix_cppflags
+cflags_release = -std=c99 -Wall -Wextra -Os -g0 -DNDEBUG $posix_cppflags
 
 # ---------------------------------------------------------------------------
 # rules
@@ -96,48 +117,40 @@ rule link_release
   command = $cxx $cxxflags_release -o $out $in $app_ldflags $app_libs
   description = LD $out
 
-rule mkdir_touch
-  command = mkdir -p $dir && touch $out
-  description = MKDIR $dir
-  restat = 1
-
-# Download $url into $dest, then touch stamp $out. Stamp lives under build/ so
-# vendor trees are not ninja outputs (avoids always-dirty no-input edges).
 rule curl_stamp
-  command = mkdir -p $$(dirname $dest) $$(dirname $out) && curl -fsSL -o $dest $url && touch $out
+  command = $py scripts/curl_stamp.py $url $dest $out
   description = CURL $dest
   restat = 1
   pool = console
 
 rule curl_zip
-  command = mkdir -p $$(dirname $out) && curl -L --fail --output $out $url
+  command = $py scripts/curl_zip.py $url $out
   description = CURL $out
   pool = console
 
 rule extract_miniz
-  command = rm -rf ${miniz_dir} && mkdir -p ${miniz_dir} && 7z x $in -o${miniz_dir} -y && rm -rf ${miniz_dir}/examples && rm -f ${miniz_dir}/ChangeLog.md ${miniz_dir}/readme.md && touch $out
+  command = $py scripts/extract_vendor.py miniz $in ${miniz_dir} $out
   description = EXTRACT miniz
   restat = 1
 
 rule extract_imgui
-  command = rm -rf ${imgui_dir} && mkdir -p ${imgui_dir} && 7z x $in -o${imgui_dir} -y && mv ${imgui_dir}/imgui-${imgui_tag}/* ${imgui_dir}/ && rm -rf ${imgui_dir}/imgui-${imgui_tag} && rm -rf ${imgui_dir}/backends ${imgui_dir}/docs ${imgui_dir}/examples ${imgui_dir}/misc && rm -f ${imgui_dir}/imgui_demo.cpp && touch $out
+  command = $py scripts/extract_vendor.py imgui $in ${imgui_dir} ${imgui_tag} $out
   description = EXTRACT imgui
   restat = 1
 
 rule run_tests
-  command = n="$$n" s="$$s" make --no-print-directory test
+  command = $py scripts/run_tests.py
   description = TEST
+  pool = console
+
+rule doxygen
+  command = $py -c "import shutil,sys,os,subprocess; shutil.which('doxygen') or sys.exit('doxygen not found'); os.makedirs('docs/api', exist_ok=True); subprocess.check_call(['doxygen', sys.argv[1]]); print('Open docs/api/html/index.html')" $in
+  description = DOXYGEN $in
   pool = console
 
 # ---------------------------------------------------------------------------
 # sources → objects (debug + release)
 # ---------------------------------------------------------------------------
-
-cxx_srcs = src/converter.cpp src/decode/decoder.cpp src/export/gltf_exporter.cpp src/gltf/gltf_writer.cpp src/deflate_io_miniz.cpp src/image_io_stb.cpp src/json_io_cjson.cpp src/gltf_io_cgltf.cpp src/main.cpp src/util/png_writer.cpp
-# app C sources (exclude src/debug.c — viewer only, compiled as C++)
-c_srcs = src/impl.c
-vendor_c_srcs = vendors/cjson/cJSON.c vendors/miniz/miniz.c
-imgui_srcs = vendors/imgui/imgui.cpp vendors/imgui/imgui_draw.cpp vendors/imgui/imgui_tables.cpp vendors/imgui/imgui_widgets.cpp
 
 # --- debug objects ---
 build build/obj/debug/converter.o: cxx_debug src/converter.cpp
@@ -161,7 +174,7 @@ build build/obj/debug/imgui/imgui_draw.o: cxx_imgui_debug vendors/imgui/imgui_dr
 build build/obj/debug/imgui/imgui_tables.o: cxx_imgui_debug vendors/imgui/imgui_tables.cpp
 build build/obj/debug/imgui/imgui_widgets.o: cxx_imgui_debug vendors/imgui/imgui_widgets.cpp
 
-build build/debug: link_debug $
+build build/debug${exe}: link_debug $
     build/obj/debug/converter.o $
     build/obj/debug/decode/decoder.o $
     build/obj/debug/deflate_io_miniz.o $
@@ -195,7 +208,7 @@ build build/obj/release/impl.o: cc_release src/impl.c
 build build/obj/release/vendors/cjson/cJSON.o: cc_release vendors/cjson/cJSON.c
 build build/obj/release/vendors/miniz/miniz.o: cc_release vendors/miniz/miniz.c
 
-build build/m3g: link_release $
+build build/m3g${exe}: link_release $
     build/obj/release/converter.o $
     build/obj/release/decode/decoder.o $
     build/obj/release/deflate_io_miniz.o $
@@ -214,8 +227,8 @@ build build/m3g: link_release $
 # phony aliases
 # ---------------------------------------------------------------------------
 
-build all debug view: phony build/debug
-build release: phony build/m3g
+build all debug view: phony build/debug${exe}
+build release: phony build/m3g${exe}
 
 default all
 
@@ -307,15 +320,9 @@ build setup-imgui: phony ${imgui_stamp}
 
 build setup: phony setup-cgltf setup-cjson setup-stb setup-sokol setup-libs setup-miniz setup-imgui
 
-
 # ---------------------------------------------------------------------------
 # docs (doxygen)
 # ---------------------------------------------------------------------------
-
-rule doxygen
-  command = command -v doxygen >/dev/null 2>&1 || { echo "doxygen not found" >&2; exit 1; }; mkdir -p docs/api && doxygen $in && echo "Open docs/api/html/index.html"
-  description = DOXYGEN $in
-  pool = console
 
 build docs/api/html/index.html: doxygen Doxyfile | include/m3g.hpp include/m3g.h
 build doc: phony docs/api/html/index.html
@@ -328,7 +335,6 @@ build test: run_tests
   pool = console
 
 # ---------------------------------------------------------------------------
-# clean note: use `ninja -t clean` for outputs known to ninja.
-# Makefile also removes build/ and tests/bin entirely; for a full wipe:
-#   rm -rf build tests/bin
+# clean: ninja -t clean
+# full wipe: rm -rf build tests/bin   |   rmdir /s /q build tests\bin
 # ---------------------------------------------------------------------------

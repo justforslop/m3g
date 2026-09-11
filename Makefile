@@ -8,9 +8,10 @@
 #   make clean
 #   make doc         # Doxygen HTML -> docs/api/html (needs doxygen)
 #
-# Ninja (same targets/outputs; see build.ninja and BUILD.md):
+# Ninja (same targets/outputs; one file build.ninja — Linux + Windows/MinGW):
 #   ninja / ninja debug / ninja view / ninja release / ninja test / ninja setup
 #   ninja doc
+#   Windows: uncomment MinGW overrides at top of build.ninja (see BUILD.md)
 #
 # Viewer:
 #   ./build/debug assets/90.m3g

@@ -9,12 +9,12 @@ Most third-party code lives under `vendors/` and is fetched with the `setup`
 targets (Make or Ninja).
 
 ```bash
-# Make
+# Make (Linux / POSIX)
 make debug      # Sokol + Dear ImGui viewer → build/debug  (default `make`)
 make release    # CLI converter             → build/m3g
 make test       # unit tests under tests/bin/
 
-# Ninja (equivalent)
+# Ninja — one file: build.ninja (Linux defaults; Windows: see below)
 ninja           # viewer → build/debug  (default)
 ninja release   # CLI    → build/m3g
 ninja test      # unit tests under tests/bin/
@@ -22,42 +22,79 @@ ninja test      # unit tests under tests/bin/
 
 ## Requirements
 
-**Host:** Linux (POSIX; `_DEFAULT_SOURCE` is set for vendor and app code).
+**Host:**
+
+| Host | Driver | Notes |
+| ---- | ------ | ----- |
+| **Linux** (POSIX) | Make and/or Ninja | `_DEFAULT_SOURCE` set; viewer needs X11 + GL |
+| **Windows** | **Ninja** + **MinGW** `g++`/`gcc` | Uncomment Win block in `build.ninja` (or CLI overrides); viewer uses Win32 + `opengl32` |
+
+MSVC `cl.exe` is **not** wired in `build.ninja` (GCC-style flags). Use **CMake**
+if you need MSVC. **Make** remains Linux/POSIX-oriented.
 
 **Toolchain (required for build / release / tests):**
 
 | Tool    | Role                                                                  |
 | ------- | --------------------------------------------------------------------- |
-| `g++`   | C++17 compiler (CLI + viewer; `debug.c` is compiled as C++)           |
+| `g++` / `c++` | C++17 compiler (CLI + viewer; `debug.c` is compiled as C++)     |
 | `gcc`   | C99 compiler (app C sources, cJSON, tests)                            |
-| `make`  | Build driver (`Makefile`) — **or**                                    |
-| `ninja` | Build driver (`build.ninja`)                                          |
-| `curl`  | `setup` downloads (`-fsSL`)                                           |
+| `make`  | Build driver (`Makefile`) — Linux/POSIX — **or**                      |
+| `ninja` | Build driver (`build.ninja`) — **Linux and Windows**                  |
+| `python3` | Ninja `setup` / `test` / `doc` helpers (`scripts/*.py`)             |
 | `7z`    | Unpack miniz / imgui zip archives (`setup-miniz`, `setup-imgui`)      |
 
-You need **either** `make` **or** `ninja` (or both). Compilers and `curl`/`7z`
-are the same either way.
+You need **either** `make` **or** `ninja` on Linux (or both). On Windows use
+**ninja**. Make still uses `curl` for `setup`; Ninja `setup` uses Python
+(`urllib`) plus `7z` for zips.
+
+Everything lives in **`build.ninja`** (no `conf.ninja` / configure step).
+Linux link flags are the defaults. Ninja cannot `if` on OS, so Windows is:
+
+1. Uncomment the **Windows MinGW overrides** block at the top of `build.ninja`, or
+2. Override on the CLI, for example:
+
+```bash
+ninja release exe=.exe cxx=g++ view_libs="-lm -lopengl32 -lgdi32" posix_cppflags= py=python
+```
 
 **Not required** for debug / release / test builds:
 
 | Tool  | Role if present                                                            |
 | ----- | -------------------------------------------------------------------------- |
-| CMake | Optional: installable package, `ctest`, `compile_commands.json` |
+| CMake | Optional: installable package, `ctest`, `compile_commands.json`, MSVC      |
+| `curl` | Make `setup` only (Ninja setup uses Python)                              |
 
 **System libraries** (headers + link libs):
 
-| Library                               | Used for                                     |
-| ------------------------------------- | -------------------------------------------- |
-| libm                                  | Math (`-lm`)                                 |
-| OpenGL (`libGL`)                      | Viewer only (Sokol GLCORE)                   |
-| X11 (`libX11`, `libXi`, `libXcursor`) | Viewer window / input (`sokol_app`)          |
-| libdl, libpthread                     | Viewer (dynamic GL, threads)                 |
+| Library | Platform | Used for |
+| ------- | -------- | -------- |
+| libm (`-lm`) | Linux, MinGW | Math |
+| OpenGL (`libGL`) | Linux | Viewer (Sokol GLCORE) |
+| X11 (`libX11`, `libXi`, `libXcursor`) | Linux | Viewer window / input |
+| libdl, libpthread | Linux | Viewer |
+| `opengl32`, `gdi32` | Windows | Viewer (Sokol Win32 + GL) |
 
-**CLI** (`build/m3g`) links only **libm** (deflate/Adler-32 via vendored **miniz**).\
-**Viewer** (`build/debug`) additionally links **OpenGL** and **X11**.
+**CLI** (`build/m3g` / `build/m3g.exe`) links **libm** (deflate via vendored **miniz**).\
+**Viewer** (`build/debug` / `build/debug.exe`) additionally links platform GL/window libs.
 
 Dear ImGui, Sokol, cJSON, cgltf, stb, and test helpers are **vendored** (not
 system packages).
+
+### Windows (Ninja + MinGW)
+
+1. Install **ninja**, **MinGW-w64** `g++`/`gcc`, **Python 3**, and **7z** on `PATH`.
+2. Uncomment the Windows override block in `build.ninja` (or pass CLI overrides).
+3. Build:
+
+```bat
+ninja setup
+ninja release
+ninja
+build\m3g.exe assets\90.m3g out.glb --overwrite
+build\debug.exe assets\90.m3g
+```
+
+Tests: `ninja test` → `scripts/run_tests.py`. Filters: `set n=1&& ninja test`.
 
 On Arch Linux:
 
@@ -73,7 +110,8 @@ In the table below, `→` means **requires** or **installed as a dependency of**
 | **miniz** (vendored)                        | `make setup-miniz` / `ninja setup-miniz` |
 | **OpenGL** / Mesa (`libGL`) (viewer)        | `mesa` or a GPU driver stack  |
 | **X11** (`libX11`, `libXi`, `libXcursor`)   | `libx11` `libxi` `libxcursor` |
-| **curl** (`setup`)                          | `pacman` → `curl`             |
+| **curl** (Make `setup`)                     | `pacman` → `curl`             |
+| **python** (Ninja `setup` / `test`)         | `pacman` → `python`           |
 | **7z** (`setup-miniz` / `setup-imgui`)      | `7zip` or `p7zip`             |
 
 ### Minimal install
@@ -81,7 +119,7 @@ In the table below, `→` means **requires** or **installed as a dependency of**
 `--needed` skips packages you already have.
 
 ```bash
-sudo pacman -S --needed base-devel ninja curl mesa libx11 libxi libxcursor 7zip
+sudo pacman -S --needed base-devel ninja curl python mesa libx11 libxi libxcursor 7zip
 ```
 
 **Vendored sources** — fetch once before the first build (CLI **`curl`**
@@ -108,20 +146,21 @@ make view           # alias for make debug
 make release        # CLI    → build/m3g
 make clean          # rm -rf build tests/bin
 
-# Ninja
-ninja               # viewer → build/debug
+# Ninja (single build.ninja; Windows: uncomment Win overrides in file)
+ninja               # viewer → build/debug[.exe]
 ninja debug         # same
 ninja view          # alias for debug
-ninja release       # CLI    → build/m3g
+ninja release       # CLI    → build/m3g[.exe]
 ninja -t clean      # remove ninja-known outputs
 # full wipe (matches make clean):
-rm -rf build tests/bin
+rm -rf build tests/bin          # POSIX
+# rmdir /s /q build tests\bin   # Windows cmd
 ```
 
-| Target (Make / Ninja) | Binary        | Flags                  | Links                                |
-| --------------------- | ------------- | ---------------------- | ------------------------------------ |
-| `debug` / `view`      | `build/debug` | `-O0 -g` (C++17 + C99) | m, GL, X11, Xi, Xcursor, dl, pthread |
-| `release`             | `build/m3g`  | `-Os -g0 -DNDEBUG`     | m                                    |
+| Target (Make / Ninja) | Binary | Flags | Links |
+| --------------------- | ------ | ----- | ----- |
+| `debug` / `view` | `build/debug` (`.exe` on Windows) | `-O0 -g` (C++17 + C99) | **Linux:** m, GL, X11, Xi, Xcursor, dl, pthread · **Windows:** m, opengl32, gdi32 |
+| `release` | `build/m3g` (`.exe` on Windows) | `-Os -g0 -DNDEBUG` | m |
 
 Object files live under `build/obj/<debug\|release>/` so `build/debug` can be
 the viewer executable (not a directory).
@@ -292,6 +331,9 @@ Run all tests:
 make test     # or: ninja test
 ```
 
+`ninja test` runs `scripts/run_tests.py` (Make still has its own recipe).
+It does **not** require Make.
+
 Run **one or more** tests by number:
 
 ```bash
@@ -300,6 +342,8 @@ make test n=2,3    # tests/002_* and 003_*
 make test n="2, 3" # same (spaces allowed if quoted)
 n=1 ninja test     # Ninja: pass filters as env vars
 n=2,3 ninja test
+# Windows cmd:
+set n=1&& ninja test
 ```
 
 Run **from a test onward**:
