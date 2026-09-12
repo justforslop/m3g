@@ -4,8 +4,12 @@
  * Inspired by sokol-samples cgltf-sapp, but loads M3G via the public decode API
  * and draws with sokol_gl (no basisu / shdc / dbgui).
  *
- * Build:  make view
+ * Build:  make view   or   zig build -p build
  * Run:    ./build/debug assets/90.m3g
+ *
+ * Graphics backend:
+ *   Windows — SOKOL_D3D11 (avoids WGL pixel-format / GL 4.3 core failures)
+ *   else    — SOKOL_GLCORE (GLX on Linux)
  *
  * Controls:
  *   LMB drag  — orbit
@@ -16,7 +20,15 @@
  */
 #define SOKOL_IMPL
 #define SOKOL_TIME_IMPL
+/* Required by sokol_gfx_imgui (sg_install_trace_hooks). */
+#define SOKOL_TRACE_HOOKS
+#if defined(_WIN32)
+#define SOKOL_D3D11
+/* Zig/MinGW often links a console subsystem; prefer main() over WinMain. */
+#define SOKOL_WIN32_FORCE_MAIN
+#else
 #define SOKOL_GLCORE
+#endif
 #include "sokol/sokol_gfx.h"
 #include "sokol/sokol_app.h"
 #include "sokol/sokol_log.h"
@@ -144,6 +156,10 @@ struct App {
     float orig_dist = 0.f;
     Vec3 orig_center{};
     float radius = 1.f;
+    /* AABB side lengths (world space); Pos/Look sliders use 3× the largest. */
+    float side_x = 1.f;
+    float side_y = 1.f;
+    float side_z = 1.f;
     float ambient = 0.35f;
     bool draw_enabled = true;
     bool draw_textures = true;
@@ -178,10 +194,12 @@ void draw_light_debug(void) {
     sgl_end();
 }
 
-void compute_bounds(const std::vector<TriVertex> &tris, Vec3 *out_center, float *out_radius) {
+void compute_bounds(const std::vector<TriVertex> &tris, Vec3 *out_center, float *out_radius, float *out_sx,
+                    float *out_sy, float *out_sz) {
     if (tris.empty()) {
         *out_center = {};
         *out_radius = 1.f;
+        *out_sx = *out_sy = *out_sz = 1.f;
         return;
     }
     Vec3 mn{1e30f, 1e30f, 1e30f};
@@ -200,10 +218,19 @@ void compute_bounds(const std::vector<TriVertex> &tris, Vec3 *out_center, float 
     const float dx = mx.x - mn.x;
     const float dy = mx.y - mn.y;
     const float dz = mx.z - mn.z;
+    *out_sx = std::max(dx, 1e-3f);
+    *out_sy = std::max(dy, 1e-3f);
+    *out_sz = std::max(dz, 1e-3f);
     *out_radius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
     if (*out_radius < 1e-3f) {
         *out_radius = 1.f;
     }
+}
+
+/* Half-range for Pos/Look sliders: 3× each AABB side, then the largest. */
+float camera_pos_span(void) {
+    const float span = std::max(g.side_x, std::max(g.side_y, g.side_z)) * 3.f;
+    return std::max(span, 1e-3f);
 }
 
 int material_image_index(const m3g::scene::SceneIr &scene, const m3g::scene::ScenePrimitiveIr &prim) {
@@ -376,7 +403,7 @@ void build_draw_list(void) {
             walk_node(scene, i, identity, &g.tris);
         }
     }
-    compute_bounds(g.tris, &g.center, &g.radius);
+    compute_bounds(g.tris, &g.center, &g.radius, &g.side_x, &g.side_y, &g.side_z);
     if (g.orig_dist <= 0.f) {
         g.dist = g.radius * 2.8f;
         g.lat = 20.f;
@@ -511,7 +538,9 @@ void draw_ui(void) {
             ImGui::SliderFloat("Longitude", &g.lon, -360.f, 360.f, "%.1f");
             ImGui::Separator();
             {
-                const float span = std::max(g.radius * 8.f, 1.f);
+                /* span = max(3×side_x, 3×side_y, 3×side_z); ranges fixed on orig model center */
+                const float span = camera_pos_span();
+                const Vec3 pivot = (g.orig_dist > 0.f) ? g.orig_center : g.center;
                 const float clat = g.lat * 0.01745329252f;
                 const float clon = g.lon * 0.01745329252f;
                 float pos[3] = {
@@ -519,9 +548,12 @@ void draw_ui(void) {
                     g.center.y + g.dist * std::sin(clat),
                     g.center.z + g.dist * std::cos(clat) * std::cos(clon),
                 };
-                if (ImGui::SliderFloat("Pos X", &pos[0], g.center.x - span, g.center.x + span, "%.2f") ||
-                    ImGui::SliderFloat("Pos Y", &pos[1], g.center.y - span, g.center.y + span, "%.2f") ||
-                    ImGui::SliderFloat("Pos Z", &pos[2], g.center.z - span, g.center.z + span, "%.2f")) {
+                /* Call every SliderFloat every frame — do not || short-circuit or
+                 * inactive axes disappear while one is dragged. */
+                const bool pos_x = ImGui::SliderFloat("Pos X", &pos[0], pivot.x - span, pivot.x + span, "%.2f");
+                const bool pos_y = ImGui::SliderFloat("Pos Y", &pos[1], pivot.y - span, pivot.y + span, "%.2f");
+                const bool pos_z = ImGui::SliderFloat("Pos Z", &pos[2], pivot.z - span, pivot.z + span, "%.2f");
+                if (pos_x || pos_y || pos_z) {
                     const float dx = pos[0] - g.center.x;
                     const float dy = pos[1] - g.center.y;
                     const float dz = pos[2] - g.center.z;
@@ -534,9 +566,9 @@ void draw_ui(void) {
                     g.lon = std::atan2(dx, dz) * 57.2957795f;
                 }
                 ImGui::Separator();
-                ImGui::SliderFloat("Look X", &g.center.x, g.center.x - span, g.center.x + span, "%.2f");
-                ImGui::SliderFloat("Look Y", &g.center.y, g.center.y - span, g.center.y + span, "%.2f");
-                ImGui::SliderFloat("Look Z", &g.center.z, g.center.z - span, g.center.z + span, "%.2f");
+                ImGui::SliderFloat("Look X", &g.center.x, pivot.x - span, pivot.x + span, "%.2f");
+                ImGui::SliderFloat("Look Y", &g.center.y, pivot.y - span, pivot.y + span, "%.2f");
+                ImGui::SliderFloat("Look Z", &g.center.z, pivot.z - span, pivot.z + span, "%.2f");
                 if (ImGui::Button("Restore original position")) {
                     g.lat = g.orig_lat;
                     g.lon = g.orig_lon;
@@ -800,9 +832,21 @@ extern "C" sapp_desc sokol_main(int argc, char *argv[]) {
     desc.event_cb = event;
     desc.width = 1024;
     desc.height = 720;
+    /* MSAA 4x often makes WGL pixel-format selection fail on Windows GL drivers;
+     * D3D11 is fine with 4, but 1 is the most portable default. */
+#if defined(_WIN32)
+    desc.sample_count = 1;
+#else
     desc.sample_count = 4;
+#endif
     desc.window_title = "m3g M3G viewer";
     desc.icon.sokol_default = true;
     desc.logger.func = slog_func;
+#if defined(SOKOL_GLCORE)
+    /* Sokol default on non-macOS is GL 4.3; many Windows/Intel drivers only do 3.3.
+     * Keep 3.3 if someone builds with -DSOKOL_GLCORE on Windows. */
+    desc.gl.major_version = 3;
+    desc.gl.minor_version = 3;
+#endif
     return desc;
 }

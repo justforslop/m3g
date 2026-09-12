@@ -258,13 +258,13 @@ LDLIBS   += $(shell pkg-config --libs m3g)
 
 **Bundle toggles** (same idea as CMake `M3G_BUNDLE_*`; default **1** = on):
 
-| Variable | Default | Meaning |
-| -------- | ------- | ------- |
-| `M3G_WITH_EXPORT` | 1 | Converter / glTF export objects in the `.a` |
-| `M3G_BUNDLE_MINIZ` | 1 | miniz + `DeflateIo` adapter |
-| `M3G_BUNDLE_STB` | 1 | stb impl + `ImageIo` adapter |
-| `M3G_BUNDLE_CJSON` | 1 | cJSON + `JsonIo` adapter |
-| `M3G_BUNDLE_CGLTF` | 1 | cgltf impl + `GltfIo` adapter |
+| Variable           | Default | Meaning                                     |
+| ------------------ | ------- | ------------------------------------------- |
+| `M3G_WITH_EXPORT`  | 1       | Converter / glTF export objects in the `.a` |
+| `M3G_BUNDLE_MINIZ` | 1       | miniz + `DeflateIo` adapter                 |
+| `M3G_BUNDLE_STB`   | 1       | stb impl + `ImageIo` adapter                |
+| `M3G_BUNDLE_CJSON` | 1       | cJSON + `JsonIo` adapter                    |
+| `M3G_BUNDLE_CGLTF` | 1       | cgltf impl + `GltfIo` adapter               |
 
 ```bash
 # decode-only, no vendored backends (call set_*_io yourself):

@@ -278,8 +278,13 @@ fn addCSources(mod: *std.Build.Module, b: *std.Build, files: []const []const u8,
 fn linkViewer(mod: *std.Build.Module, os: std.Target.Os.Tag) void {
     switch (os) {
         .windows => {
-            mod.linkSystemLibrary("opengl32", .{});
+            // SOKOL_D3D11 (see src/debug.c) — not WGL/opengl32.
+            mod.linkSystemLibrary("d3d11", .{});
+            mod.linkSystemLibrary("dxgi", .{});
+            mod.linkSystemLibrary("user32", .{});
             mod.linkSystemLibrary("gdi32", .{});
+            mod.linkSystemLibrary("shell32", .{});
+            mod.linkSystemLibrary("kernel32", .{});
         },
         else => {
             // Linux / *BSD: Sokol GLCORE + X11
