@@ -36,10 +36,7 @@ const app_name = "m3g";
 const lib_cpp_sources = [_][]const u8{
     "src/converter.cpp",
     "src/decode/decoder.cpp",
-    "src/deflate_io_miniz.cpp",
-    "src/image_io_stb.cpp",
-    "src/json_io_cjson.cpp",
-    "src/gltf_io_cgltf.cpp",
+    "src/io_adapters_cxx.cpp",
     "src/export/gltf_exporter.cpp",
     "src/gltf/gltf_writer.cpp",
     "src/util/png_writer.cpp",
@@ -47,6 +44,12 @@ const lib_cpp_sources = [_][]const u8{
 
 const lib_c_sources = [_][]const u8{
     "src/impl.c",
+    "src/m3g_impl.c",
+    "src/deflate_io_miniz.c",
+    "src/image_io_stb.c",
+    "src/json_io_cjson.c",
+    "src/gltf_io_cgltf.c",
+    "src/math_io_vecmath.c",
     "vendors/cjson/cJSON.c",
     "vendors/miniz/miniz.c",
 };
@@ -57,6 +60,7 @@ const lib_backend_macros = [_]struct { []const u8, []const u8 }{
     .{ "M3G_HAS_STB_BACKEND", "1" },
     .{ "M3G_HAS_CJSON_BACKEND", "1" },
     .{ "M3G_HAS_CGLTF_BACKEND", "1" },
+    .{ "M3G_HAS_VECMATH_BACKEND", "1" },
     .{ "M3G_IMPL_STB", "1" },
     .{ "M3G_IMPL_CGLTF", "1" },
 };
@@ -169,7 +173,7 @@ pub fn build(b: *std.Build) void {
     addCppSources(view_mod, b, &lib_cpp_sources, view_cpp_flags);
     addCSources(view_mod, b, &lib_c_sources, view_c_flags);
     view_mod.addCSourceFile(.{
-        .file = b.path("src/debug.c"),
+        .file = b.path("src/debug.cpp"),
         .flags = view_cpp_flags,
         .language = .cpp,
     });
@@ -278,7 +282,7 @@ fn addCSources(mod: *std.Build.Module, b: *std.Build, files: []const []const u8,
 fn linkViewer(mod: *std.Build.Module, os: std.Target.Os.Tag) void {
     switch (os) {
         .windows => {
-            // SOKOL_D3D11 (see src/debug.c) — not WGL/opengl32.
+            // SOKOL_D3D11 (see src/debug.cpp) — not WGL/opengl32.
             mod.linkSystemLibrary("d3d11", .{});
             mod.linkSystemLibrary("dxgi", .{});
             mod.linkSystemLibrary("user32", .{});

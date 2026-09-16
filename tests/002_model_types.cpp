@@ -65,11 +65,51 @@ int main(void)
     }
     TESTFW_TEST_END();
 
-    TESTFW_TEST_BEGIN("Object::type_name via HeaderObject");
+    TESTFW_TEST_BEGIN("Object::type_name via Header / World (Java-like names)");
     {
-        HeaderObject h;
-        h.object_type = ObjectTypes::HEADER;
+        Header h;
         TESTFW_EXPECTED(h.type_name() == "Header");
+        World w;
+        TESTFW_EXPECTED(w.type_name() == "World");
+        TESTFW_EXPECTED(w.getUserID() == 0);
+        w.setUserID(42);
+        TESTFW_EXPECTED(w.getUserID() == 42);
+        Mesh mesh;
+        TESTFW_EXPECTED(mesh.type_name() == "Mesh");
+        TESTFW_EXPECTED(mesh.getSubmeshCount() == 0);
+    }
+    TESTFW_TEST_END();
+
+    TESTFW_TEST_BEGIN("Java-like constants on Camera / Light / Image2D");
+    TESTFW_EXPECTED(Camera::PERSPECTIVE == 50);
+    TESTFW_EXPECTED(Light::DIRECTIONAL == 129);
+    TESTFW_EXPECTED(Image2D::RGBA == 100);
+    TESTFW_EXPECTED(KeyframeSequence::LOOP == 193);
+    TESTFW_EXPECTED(CompositingMode::REPLACE == 68);
+    TESTFW_EXPECTED(ObjectTypes::SPRITE_3D == 18);
+    TESTFW_TEST_END();
+
+    TESTFW_TEST_BEGIN("Java package aliases + Transform / Graphics3D");
+    {
+        m3g::World w;
+        TESTFW_EXPECTED(w.type_name() == "World");
+        m3g::Transform t;
+        float m[16];
+        t.get(m);
+        TESTFW_EXPECTED(std::fabs(m[0] - 1.f) < 1e-5f);
+        t.postTranslate(1.f, 2.f, 3.f);
+        t.get(m);
+        TESTFW_EXPECTED(std::fabs(m[12] - 1.f) < 1e-5f);
+        auto &g3d = m3g::Graphics3D::getInstance();
+        g3d.setViewport(0, 0, 640, 480);
+        TESTFW_EXPECTED(g3d.getViewportWidth() == 640);
+        m3g::MorphingMesh mm;
+        TESTFW_EXPECTED(mm.type_name() == "MorphingMesh");
+        m3g::Sprite3D sp;
+        TESTFW_EXPECTED(sp.type_name() == "Sprite3D");
+        m3g::IndexBuffer *ib = new m3g::TriangleStripArray();
+        TESTFW_EXPECTED(ib->type_name() == "TriangleStripArray");
+        delete ib;
     }
     TESTFW_TEST_END();
 

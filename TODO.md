@@ -21,3 +21,5 @@
 
 - ~~Make this library into single header library~~ (public API + decode impl in
   `m3g.hpp` via `M3G_IMPL`; convert/export still in `src/`).
+- ~~Portable C99 single-header~~ → `include/m3g.h` (`M3G_IMPLEMENTATION`) +
+  `vendors/libs/vecmath.h` for TRS/quat math. C++ `m3g.hpp` kept for export.

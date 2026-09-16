@@ -2,14 +2,14 @@
 # Generate: make doc   (or: doxygen Doxyfile)
 
 PROJECT_NAME           = m3g
-PROJECT_BRIEF          = "JSR-184 / M3G decode and glTF convert (C++17)"
+PROJECT_BRIEF          = "JSR-184 / M3G decode (C99 m3g.h) and glTF convert (C++17 m3g.hpp)"
 PROJECT_NUMBER         =
 
 OUTPUT_DIRECTORY       = docs/api
 CREATE_SUBDIRS         = NO
 
-# Document the C++ amalgamated header; m3g.h is a thin C stub.
-INPUT                  = include/m3g.hpp include/m3g.h
+# Public APIs: C single-header + C++ amalgamated header.
+INPUT                  = include/m3g.h include/m3g.hpp
 FILE_PATTERNS          = *.hpp *.h
 RECURSIVE              = NO
 
@@ -28,7 +28,9 @@ EXPAND_ONLY_PREDEF     = YES
 PREDEFINED             = __cplusplus=201703L \
                          M3G_DECODE_API_DECL= \
                          M3G_API_DECL= \
-                         M3G_API_IMPL=
+                         M3G_API_IMPL= \
+                         M3G_API= \
+                         DOXYGEN=1
 SKIP_FUNCTION_MACROS   = YES
 
 QUIET                  = YES

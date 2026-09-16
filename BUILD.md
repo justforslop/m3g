@@ -42,7 +42,7 @@ remains Linux/POSIX-oriented.
 
 | Tool          | Role                                                                 |
 | ------------- | -------------------------------------------------------------------- |
-| `g++` / `c++` | Make: C++17 compiler (CLI + viewer; `debug.c` is compiled as C++)    |
+| `g++` / `c++` | Make: C++17 compiler (CLI + viewer; `debug.cpp` uses `m3g.hpp`)    |
 | `gcc`         | Make: C99 compiler (app C sources, cJSON, tests)                     |
 | `make`        | Build driver (`Makefile`) — Linux/POSIX — **or**                     |
 | `zig`         | Build driver (`build.zig`) — **Linux, Windows, cross** (ships clang) |
@@ -169,9 +169,9 @@ Object files for Make live under `build/obj/<debug\|release>/` so `build/debug`
 can be the viewer executable (not a directory). Zig caches objects under
 `.zig-cache/`.
 
-Release compiles `src/*.cpp` and `src/*.c` (except `src/debug.c`) plus
+Release compiles `src/*.cpp` and `src/*.c` (except `src/debug.cpp`) plus
 `vendors/cjson/cJSON.c` and `vendors/miniz/miniz.c`. Debug links the same
-library objects (minus `main.o`) with `src/debug.c` (as C++) and Dear ImGui.
+library objects (minus `main.o`) with `src/debug.cpp` (`m3g.hpp`) and Dear ImGui.
 
 ### Public API header (`include/m3g.hpp`)
 

@@ -33,6 +33,7 @@ option(M3G_BUNDLE_MINIZ "Compile vendors/miniz + DeflateIo adapter" ${M3G_IS_TOP
 option(M3G_BUNDLE_STB "Compile stb_image(_write) impl + ImageIo adapter" ${M3G_IS_TOP_LEVEL})
 option(M3G_BUNDLE_CJSON "Compile vendors/cjson + JsonIo adapter" ${M3G_IS_TOP_LEVEL})
 option(M3G_BUNDLE_CGLTF "Compile cgltf header impl + GltfIo adapter" ${M3G_IS_TOP_LEVEL})
+option(M3G_BUNDLE_VECMATH "Compile vecmath.h MathIo adapter (C m3g.h)" ${M3G_IS_TOP_LEVEL})
 
 # When not bundling, point at external single-header trees (or leave empty if
 # the parent target already has the include path).
@@ -78,6 +79,7 @@ set(M3G_WARNINGS -Wall -Wextra)
 # Core decode always built. Export / Converter / vendor adapters are optional.
 set(M3G_LIB_SOURCES
     src/decode/decoder.cpp
+    src/m3g_impl.c
 )
 
 if(M3G_WITH_EXPORT)
@@ -100,34 +102,44 @@ endfunction()
 
 if(M3G_BUNDLE_MINIZ)
     m3g_require_vendor_file("vendors/miniz/miniz.c" "run setup-miniz or set M3G_BUNDLE_MINIZ=OFF")
-    list(APPEND M3G_LIB_SOURCES src/deflate_io_miniz.cpp vendors/miniz/miniz.c)
+    list(APPEND M3G_LIB_SOURCES src/deflate_io_miniz.c vendors/miniz/miniz.c)
     list(APPEND M3G_BACKEND_DEFS M3G_HAS_MINIZ_BACKEND=1)
+endif()
+
+if(M3G_BUNDLE_VECMATH)
+    m3g_require_vendor_file("vendors/libs/vecmath.h" "copy vecmath.h or set M3G_BUNDLE_VECMATH=OFF")
+    list(APPEND M3G_LIB_SOURCES src/math_io_vecmath.c)
+    list(APPEND M3G_BACKEND_DEFS M3G_HAS_VECMATH_BACKEND=1)
 endif()
 
 if(M3G_BUNDLE_STB)
     m3g_require_vendor_file("vendors/stb/stb_image.h" "run setup-stb or set M3G_BUNDLE_STB=OFF")
     m3g_require_vendor_file("vendors/stb/stb_image_write.h" "run setup-stb or set M3G_BUNDLE_STB=OFF")
-    list(APPEND M3G_LIB_SOURCES src/image_io_stb.cpp)
+    list(APPEND M3G_LIB_SOURCES src/image_io_stb.c)
     list(APPEND M3G_BACKEND_DEFS M3G_HAS_STB_BACKEND=1 M3G_IMPL_STB=1)
     set(M3G_NEED_IMPL_C TRUE)
 endif()
 
 if(M3G_BUNDLE_CJSON)
     m3g_require_vendor_file("vendors/cjson/cJSON.c" "run setup-cjson or set M3G_BUNDLE_CJSON=OFF")
-    list(APPEND M3G_LIB_SOURCES src/json_io_cjson.cpp vendors/cjson/cJSON.c)
+    list(APPEND M3G_LIB_SOURCES src/json_io_cjson.c vendors/cjson/cJSON.c)
     list(APPEND M3G_BACKEND_DEFS M3G_HAS_CJSON_BACKEND=1)
 endif()
 
 if(M3G_BUNDLE_CGLTF)
     m3g_require_vendor_file("vendors/cgltf/cgltf.h" "run setup-cgltf or set M3G_BUNDLE_CGLTF=OFF")
     m3g_require_vendor_file("vendors/cgltf/cgltf_write.h" "run setup-cgltf or set M3G_BUNDLE_CGLTF=OFF")
-    list(APPEND M3G_LIB_SOURCES src/gltf_io_cgltf.cpp)
+    list(APPEND M3G_LIB_SOURCES src/gltf_io_cgltf.c)
     list(APPEND M3G_BACKEND_DEFS M3G_HAS_CGLTF_BACKEND=1 M3G_IMPL_CGLTF=1)
     set(M3G_NEED_IMPL_C TRUE)
 endif()
 
 if(M3G_NEED_IMPL_C)
     list(APPEND M3G_LIB_SOURCES src/impl.c)
+endif()
+
+if(M3G_BUNDLE_MINIZ OR M3G_BUNDLE_STB OR M3G_BUNDLE_CJSON OR M3G_BUNDLE_CGLTF)
+    list(APPEND M3G_LIB_SOURCES src/io_adapters_cxx.cpp)
 endif()
 
 if(M3G_BUILD_CLI AND M3G_WITH_EXPORT)
@@ -287,8 +299,7 @@ if(M3G_BUILD_VIEWER)
         message(FATAL_ERROR "M3G_BUILD_VIEWER requires Sokol headers (run: make setup-sokol)")
     endif()
 
-    add_executable(m3g_viewer src/debug.c ${M3G_IMGUI_SOURCES})
-    set_source_files_properties(src/debug.c PROPERTIES LANGUAGE CXX)
+    add_executable(m3g_viewer src/debug.cpp ${M3G_IMGUI_SOURCES})
     set_target_properties(m3g_viewer PROPERTIES OUTPUT_NAME m3g-view)
     target_compile_options(m3g_viewer PRIVATE ${M3G_WARNINGS})
     target_include_directories(m3g_viewer PRIVATE
@@ -299,7 +310,7 @@ if(M3G_BUILD_VIEWER)
         target_compile_definitions(m3g_viewer PRIVATE _DEFAULT_SOURCE)
         target_link_libraries(m3g_viewer PRIVATE m3g::m3g GL X11 Xi Xcursor dl pthread)
     elseif(WIN32)
-        # src/debug.c uses SOKOL_D3D11 on Windows (not WGL).
+        # src/debug.cpp uses SOKOL_D3D11 on Windows (not WGL).
         target_link_libraries(m3g_viewer PRIVATE m3g::m3g d3d11 dxgi user32 gdi32 shell32)
     else()
         target_link_libraries(m3g_viewer PRIVATE m3g::m3g)
@@ -475,4 +486,4 @@ endif()
 # ---------------------------------------------------------------------------
 
 message(STATUS "m3g ${PROJECT_VERSION}: CLI=${M3G_BUILD_CLI} viewer=${M3G_BUILD_VIEWER} tests=${M3G_BUILD_TESTS} install=${M3G_INSTALL} export=${M3G_WITH_EXPORT}")
-message(STATUS "m3g backends: miniz=${M3G_BUNDLE_MINIZ} stb=${M3G_BUNDLE_STB} cjson=${M3G_BUNDLE_CJSON} cgltf=${M3G_BUNDLE_CGLTF}")
+message(STATUS "m3g backends: miniz=${M3G_BUNDLE_MINIZ} stb=${M3G_BUNDLE_STB} cjson=${M3G_BUNDLE_CJSON} cgltf=${M3G_BUNDLE_CGLTF} vecmath=${M3G_BUNDLE_VECMATH}")

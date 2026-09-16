@@ -1,8 +1,10 @@
 # m3g — M3G decoder / glTF converter (C++17)
 #
 # Build:
-#   make            # viewer -> build/debug  (sokol)
-#   make debug      # same
+#   make            # viewer -> build/debug     (default: C API / debug-c)
+#   make debug      # same as make debug-c
+#   make debug-c    # viewer -> build/debug-c   (m3g.h / src/debug.c)
+#   make debug-cpp  # viewer -> build/debug-cpp (m3g.hpp / src/debug.cpp)
 #   make view       # same as make debug
 #   make release    # CLI    -> build/m3g
 #   make lib        # static package library -> build/lib/libm3g.a
@@ -17,23 +19,25 @@
 #   # pkg-config --cflags --libs m3g
 #
 # Bundle toggles (default ON; set =0 to omit vendor + adapter, like CMake):
-#   make lib M3G_BUNDLE_MINIZ=0 M3G_BUNDLE_STB=0 M3G_BUNDLE_CJSON=0 M3G_BUNDLE_CGLTF=0
+#   make lib M3G_BUNDLE_MINIZ=0 M3G_BUNDLE_STB=0 M3G_BUNDLE_CJSON=0 M3G_BUNDLE_CGLTF=0 M3G_BUNDLE_VECMATH=0
 #   make lib M3G_WITH_EXPORT=0   # decode-only .a
 #
 # Zig (portable; Linux + Windows + cross — see build.zig / BUILD.md):
 #   zig build -p build / lib / debug / view / release / test / setup / doc
 #
 # Viewer:
-#   ./build/debug assets/90.m3g
+#   ./build/debug assets/90.m3g       # default (C API)
+#   ./build/debug-c assets/90.m3g
+#   ./build/debug-cpp assets/90.m3g
 #
-# Object files live under build/obj/<config>/ so build/debug can be the binary.
+# Object files live under build/obj/<config>/ so build/debug* can be binaries.
 #
 # CMake (LSP compile_commands, optional ctest, find_package):
 #   cmake -S . -B build && cmake --build build
 #
 # Vendored headers:
 #   make setup   # or: zig build setup
-.PHONY: all debug release view lib package install uninstall clean \
+.PHONY: all debug debug-c debug-cpp release view lib package install uninstall clean \
 	setup setup-libs setup-cgltf setup-cjson setup-stb setup-sokol setup-miniz setup-imgui test doc
 
 MINIZ_TAG := 3.1.2
@@ -81,12 +85,13 @@ PKGDIR_BUILD := $(BUILDROOT)/lib/pkgconfig
 # 1 = on, 0 = off. Full tree defaults match CMake top-level + Zig package.
 M3G_WITH_EXPORT   ?= 1
 M3G_BUNDLE_MINIZ  ?= 1
+M3G_BUNDLE_VECMATH ?= 1
 M3G_BUNDLE_STB    ?= 1
 M3G_BUNDLE_CJSON  ?= 1
 M3G_BUNDLE_CGLTF  ?= 1
 
 # Isolate lib objects by bundle flags so toggling M3G_BUNDLE_* cannot reuse stale .o.
-LIB_CFG := e$(M3G_WITH_EXPORT)m$(M3G_BUNDLE_MINIZ)s$(M3G_BUNDLE_STB)j$(M3G_BUNDLE_CJSON)g$(M3G_BUNDLE_CGLTF)
+LIB_CFG := e$(M3G_WITH_EXPORT)m$(M3G_BUNDLE_MINIZ)s$(M3G_BUNDLE_STB)j$(M3G_BUNDLE_CJSON)g$(M3G_BUNDLE_CGLTF)v$(M3G_BUNDLE_VECMATH)
 LIB_OBJDIR := $(BUILDROOT)/obj/lib-$(BUILD)-$(LIB_CFG)
 
 M3G_BACKEND_DEFS :=
@@ -129,30 +134,31 @@ LIB_CXX_SRCS += \
 	$(SRCDIR)/gltf/gltf_writer.cpp \
 	$(SRCDIR)/util/png_writer.cpp
 endif
-ifeq ($(M3G_BUNDLE_MINIZ),1)
-LIB_CXX_SRCS += $(SRCDIR)/deflate_io_miniz.cpp
-endif
-ifeq ($(M3G_BUNDLE_STB),1)
-LIB_CXX_SRCS += $(SRCDIR)/image_io_stb.cpp
-endif
-ifeq ($(M3G_BUNDLE_CJSON),1)
-LIB_CXX_SRCS += $(SRCDIR)/json_io_cjson.cpp
-endif
-ifeq ($(M3G_BUNDLE_CGLTF),1)
-LIB_CXX_SRCS += $(SRCDIR)/gltf_io_cgltf.cpp
+# C++ install_* bridges (miniz/stb/cjson/cgltf C adapters)
+ifneq ($(filter 1,$(M3G_BUNDLE_MINIZ) $(M3G_BUNDLE_STB) $(M3G_BUNDLE_CJSON) $(M3G_BUNDLE_CGLTF)),)
+LIB_CXX_SRCS += $(SRCDIR)/io_adapters_cxx.cpp
 endif
 
-LIB_C_SRCS :=
+LIB_C_SRCS := $(SRCDIR)/m3g_impl.c
 ifeq ($(M3G_BUNDLE_STB),1)
 LIB_C_SRCS += $(SRCDIR)/impl.c
 else ifeq ($(M3G_BUNDLE_CGLTF),1)
 LIB_C_SRCS += $(SRCDIR)/impl.c
 endif
 ifeq ($(M3G_BUNDLE_MINIZ),1)
-LIB_C_SRCS += vendors/miniz/miniz.c
+LIB_C_SRCS += $(SRCDIR)/deflate_io_miniz.c vendors/miniz/miniz.c
+endif
+ifeq ($(M3G_BUNDLE_STB),1)
+LIB_C_SRCS += $(SRCDIR)/image_io_stb.c
 endif
 ifeq ($(M3G_BUNDLE_CJSON),1)
-LIB_C_SRCS += vendors/cjson/cJSON.c
+LIB_C_SRCS += $(SRCDIR)/json_io_cjson.c vendors/cjson/cJSON.c
+endif
+ifeq ($(M3G_BUNDLE_CGLTF),1)
+LIB_C_SRCS += $(SRCDIR)/gltf_io_cgltf.c
+endif
+ifeq ($(M3G_BUNDLE_VECMATH),1)
+LIB_C_SRCS += $(SRCDIR)/math_io_vecmath.c
 endif
 
 LIB_CXX_OBJS := $(patsubst $(SRCDIR)/%.cpp,$(LIB_OBJDIR)/%.o,$(filter $(SRCDIR)/%,$(LIB_CXX_SRCS)))
@@ -164,7 +170,7 @@ STATIC_LIB := $(LIBDIR_BUILD)/lib$(APP).a
 PC_BUILD   := $(PKGDIR_BUILD)/$(APP).pc
 
 # Full CLI / viewer still compile the whole tree (historical Make behavior).
-CXX_SRCS := $(shell find $(SRCDIR) -name '*.cpp' 2>/dev/null)
+CXX_SRCS := $(filter-out $(SRCDIR)/debug.cpp,$(shell find $(SRCDIR) -name '*.cpp' 2>/dev/null))
 C_SRCS   := $(filter-out $(SRCDIR)/debug.c,$(shell find $(SRCDIR) -name '*.c' 2>/dev/null))
 VENDOR_C_SRCS := vendors/cjson/cJSON.c vendors/miniz/miniz.c
 CXX_OBJS := $(patsubst $(SRCDIR)/%.cpp,$(OBJDIR)/%.o,$(CXX_SRCS))
@@ -173,15 +179,24 @@ VENDOR_C_OBJS := $(patsubst vendors/%.c,$(OBJDIR)/vendors/%.o,$(VENDOR_C_SRCS))
 OBJS := $(CXX_OBJS) $(C_OBJS) $(VENDOR_C_OBJS)
 BIN  := $(BUILDROOT)/$(APP)
 DEBUG_BIN := $(BUILDROOT)/debug
+DEBUG_BIN_C := $(BUILDROOT)/debug-c
+DEBUG_BIN_CPP := $(BUILDROOT)/debug-cpp
 VIEW_LIB_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
-VIEW_DEBUG_OBJ := $(OBJDIR)/debug_view.o
+VIEW_DEBUG_C_OBJ := $(OBJDIR)/debug_view_c.o
+VIEW_DEBUG_CPP_OBJ := $(OBJDIR)/debug_view_cpp.o
 IMGUI_SRCS := vendors/imgui/imgui.cpp vendors/imgui/imgui_draw.cpp vendors/imgui/imgui_tables.cpp vendors/imgui/imgui_widgets.cpp
 IMGUI_OBJS := $(patsubst vendors/imgui/%.cpp,$(OBJDIR)/imgui/%.o,$(IMGUI_SRCS))
 
 all: debug
 
-debug view:
-	@$(MAKE) --no-print-directory BUILD=debug $(DEBUG_BIN)
+# Default viewer = C API (m3g.h). Also installs build/debug alongside build/debug-c.
+debug view: debug-c
+
+debug-c:
+	@$(MAKE) --no-print-directory BUILD=debug $(DEBUG_BIN_C) $(DEBUG_BIN)
+
+debug-cpp:
+	@$(MAKE) --no-print-directory BUILD=debug $(DEBUG_BIN_CPP)
 
 release:
 	@$(MAKE) --no-print-directory BUILD=release $(BIN)
@@ -242,15 +257,32 @@ $(BIN): $(OBJS) | $(BUILDROOT)
 	@echo "LD  $@"
 	$(CXX) $(APP_CXXFLAGS) -o $@ $(OBJS) $(APP_LDFLAGS) $(APP_LIBS)
 
-$(DEBUG_BIN): $(VIEW_LIB_OBJS) $(VIEW_DEBUG_OBJ) $(IMGUI_OBJS) | $(BUILDROOT)
+# C API viewer (src/debug.c + m3g.h). Default `make debug` / `make view`.
+$(DEBUG_BIN_C): $(VIEW_LIB_OBJS) $(VIEW_DEBUG_C_OBJ) $(IMGUI_OBJS) | $(BUILDROOT)
 	@echo "LD  $@"
-	$(CXX) $(APP_CXXFLAGS) -o $@ $(VIEW_LIB_OBJS) $(VIEW_DEBUG_OBJ) $(IMGUI_OBJS) $(APP_LDFLAGS) $(VIEW_LIBS)
+	$(CXX) $(APP_CXXFLAGS) -o $@ $(VIEW_LIB_OBJS) $(VIEW_DEBUG_C_OBJ) $(IMGUI_OBJS) $(APP_LDFLAGS) $(VIEW_LIBS)
 
-# debug.c is C++ (uses m3g decode API + sokol + imgui).
-$(VIEW_DEBUG_OBJ): $(SRCDIR)/debug.c
+# Stable path used by docs / historical scripts (same binary as debug-c).
+$(DEBUG_BIN): $(DEBUG_BIN_C)
+	@echo "CP  $@  <-  $(DEBUG_BIN_C)"
+	cp -f $(DEBUG_BIN_C) $@
+
+# C++ API viewer (src/debug.cpp + m3g.hpp).
+$(DEBUG_BIN_CPP): $(VIEW_LIB_OBJS) $(VIEW_DEBUG_CPP_OBJ) $(IMGUI_OBJS) | $(BUILDROOT)
+	@echo "LD  $@"
+	$(CXX) $(APP_CXXFLAGS) -o $@ $(VIEW_LIB_OBJS) $(VIEW_DEBUG_CPP_OBJ) $(IMGUI_OBJS) $(APP_LDFLAGS) $(VIEW_LIBS)
+
+# debug.c is C++ (ImGui/sokol) + portable C m3g.h decode API.
+$(VIEW_DEBUG_C_OBJ): $(SRCDIR)/debug.c
 	@mkdir -p $(dir $@)
-	@echo "CXX $<  (viewer)"
+	@echo "CXX $<  (viewer-c)"
 	$(CXX) $(APP_CXXFLAGS) $(VIEW_CPPFLAGS) -x c++ -c -o $@ $<
+
+# debug.cpp is C++ (ImGui/sokol) + m3g.hpp decode / scene IR API.
+$(VIEW_DEBUG_CPP_OBJ): $(SRCDIR)/debug.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX $<  (viewer-cpp)"
+	$(CXX) $(APP_CXXFLAGS) $(VIEW_CPPFLAGS) -c -o $@ $<
 
 $(OBJDIR)/imgui/%.o: vendors/imgui/%.cpp
 	@mkdir -p $(dir $@)
@@ -338,7 +370,7 @@ setup-stb:
 	$(CURL) vendors/stb/stb_image_write.h \
 		https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image_write.h
 
-# Only headers used by src/debug.c (viewer).
+# Only headers used by the sokol viewer (debug.c / debug.cpp).
 setup-sokol:
 	@mkdir -p vendors/sokol vendors/sokol/util
 	$(CURL) vendors/sokol/sokol_app.h \
@@ -402,12 +434,12 @@ TEST_IMPL := tests/impl.c
 TEST_M3G_SRCS := \
 	src/converter.cpp \
 	src/decode/decoder.cpp \
-	src/deflate_io_miniz.cpp \
+	src/deflate_io_miniz.c src/io_adapters_cxx.cpp \
 	src/export/gltf_exporter.cpp \
 	src/gltf/gltf_writer.cpp \
-	src/gltf_io_cgltf.cpp \
-	src/image_io_stb.cpp \
-	src/json_io_cjson.cpp \
+	src/gltf_io_cgltf.c \
+	src/image_io_stb.c \
+	src/json_io_cjson.c \
 	src/util/png_writer.cpp \
 	src/impl.c \
 	vendors/cjson/cJSON.c \
