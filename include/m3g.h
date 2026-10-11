@@ -1,69 +1,73 @@
-/**
- * @file m3g.h
- * @brief JSR-184 / M3G decode + scene IR (portable C99 single-header).
- *
- * @mainpage m3g C API
- *
- * This header is the portable **C99** public API for parsing M3G files and
- * building an export-oriented scene IR. The optional C++ API lives in
- * `m3g.hpp` (glTF export / legacy types).
- *
- * ## Integration (stb-style)
- *
- * In **one** translation unit:
- * @code
- * #define M3G_IMPLEMENTATION
- * #include "m3g.h"
- * @endcode
- *
- * Everywhere else:
- * @code
- * #include "m3g.h"
- * @endcode
- *
- * ## Backends
- *
- * Deflate, image, and math are **not** compiled into this header. Install
- * callbacks (or link the adapter TUs) before decode:
- *
- * - @ref m3g_c_io — @ref m3g_deflate_io, @ref m3g_image_io, @ref m3g_math_io
- * - @ref m3g_install_miniz_deflate_io / @ref m3g_install_stb_image_io
- * - @ref m3g_install_portable_math_io (default) or @ref m3g_install_vecmath_math_io
- *
- * ## Decode
- *
- * @code
- * m3g_decoded d;
- * m3g_install_miniz_deflate_io();
- * if (m3g_decode_file("model.m3g", NULL, &d) == M3G_OK) {
- *     // d.file, d.scene
- *     m3g_decoded_free(&d);
- * }
- * @endcode
- *
- * Errors return a non-zero @ref m3g_result; details via @ref m3g_last_error.
- *
- * @defgroup m3g_c_version Version
- * @brief Library version macros.
- *
- * @defgroup m3g_c_error Errors
- * @brief Result codes and last-error string.
- *
- * @defgroup m3g_c_io Backend I/O and math
- * @brief Pluggable deflate, image, and vector/matrix backends.
- *
- * @defgroup m3g_c_model M3G object model
- * @brief Parsed JSR-184 object graph (`m3g_file` / `m3g_object`).
- *
- * @defgroup m3g_c_scene Scene IR
- * @brief Export-oriented intermediate representation (`m3g_scene_ir`).
- *
- * @defgroup m3g_c_decode Decode API
- * @brief Path/bytes → @ref m3g_decoded.
- *
- * @defgroup m3g_c_math Matrix helpers
- * @brief Row-major 4×4 helpers (via @ref m3g_math_io).
- */
+/*
+    m3g.h -- JSR-184 / M3G 1.1 decode + scene IR (portable C99 single-header)
+
+    C++ Java-style API: include/m3g.hpp
+
+    Do this in *one* C or C++ file to create the implementation:
+
+        #define M3G_IMPLEMENTATION
+        #include "m3g.h"
+
+    Everywhere else:
+
+        #include "m3g.h"
+
+    Optionally override before include:
+
+        M3G_API              - public linkage prefix (default: empty / extern C)
+        M3G_MALLOC / FREE    - allocator hooks (if provided by your build)
+
+    Backends are *not* baked into this header (stb/sokol style). Install them
+    before decode, or link the adapter TUs from the project:
+
+        m3g_install_miniz_deflate_io();   // compressed .m3g sections
+        m3g_install_stb_image_io();       // embedded PNG/JPEG (optional)
+        m3g_install_portable_math_io();   // default mat/vec; often auto
+
+    Or plug your own tables via m3g_set_deflate_io / m3g_set_image_io /
+    m3g_set_math_io.
+
+    USAGE (minimal decode):
+
+        #define M3G_IMPLEMENTATION
+        #include "m3g.h"
+
+        int main(void) {
+            m3g_decoded d;
+
+            m3g_install_miniz_deflate_io();
+            m3g_install_stb_image_io();       // optional
+
+            if (m3g_decode_file("model.m3g", NULL, &d) != M3G_OK) {
+                fprintf(stderr, "%s\n", m3g_last_error());
+                return 1;
+            }
+
+            // d.file  - parsed JSR-184 object graph
+            // d.scene - export-oriented scene IR
+            printf("objects=%d meshes=%zu\n",
+                   d.file.object_count,
+                   (size_t)d.scene.mesh_count);
+
+            m3g_decoded_free(&d);
+            return 0;
+        }
+
+    USAGE (bytes already in memory):
+
+        m3g_decoded d;
+        if (m3g_decode_bytes(buf, buflen, "model.m3g", NULL, &d) == M3G_OK) {
+            m3g_decoded_free(&d);
+        }
+
+    Errors: non-zero m3g_result; human string from m3g_last_error().
+
+    For glTF export and javax.microedition.m3g class bindings, see m3g.hpp.
+
+    Doxygen groups (API reference):
+      m3g_c_version, m3g_c_error, m3g_c_io, m3g_c_model,
+      m3g_c_scene, m3g_c_decode, m3g_c_math
+*/
 
 #ifndef M3G_H_INCLUDED
 #define M3G_H_INCLUDED
@@ -264,6 +268,8 @@ M3G_API void *m3g_deflate_uncompress_to_heap(unsigned char const *source, size_t
 M3G_API void m3g_deflate_free(void *p);
 M3G_API unsigned char *m3g_image_load_memory(unsigned char const *buffer, int len, int *width, int *height,
                                              int *channels_in_file, int req_comp);
+M3G_API unsigned char *m3g_image_load_file(char const *filename, int *width, int *height, int *channels_in_file,
+                                           int req_comp);
 M3G_API void m3g_image_free_pixels(void *pixels);
 /** @} */
 /** @} */ /* m3g_c_io */
@@ -355,6 +361,11 @@ typedef struct m3g_rgba {
     int blue;
     int alpha; /**< @brief 0–255; default often 255. */
 } m3g_rgba;
+
+/** @brief Write RGB as three floats in [0,1] (out must hold ≥3). */
+M3G_API void m3g_rgb_to_float(m3g_rgb const *c, float out[3]);
+/** @brief Write RGBA as four floats in [0,1] (out must hold ≥4). */
+M3G_API void m3g_rgba_to_float(m3g_rgba const *c, float out[4]);
 
 /** @brief One compressed/uncompressed section header from the file. */
 typedef struct m3g_section_info {
@@ -614,7 +625,7 @@ typedef struct m3g_image2d_data {
     int has_pixels;
 } m3g_image2d_data;
 
-/** @brief Mesh or SkinnedMesh node. */
+/** @brief Mesh, SkinnedMesh, or MorphingMesh node. */
 typedef struct m3g_mesh_data {
     m3g_node_meta node;
     int vertex_buffer_id;
@@ -624,7 +635,33 @@ typedef struct m3g_mesh_data {
     m3g_bone_transform *bone_transforms;
     int bone_transform_count;
     int is_skinned;
+    int *morph_target_ids; /**< @brief Morphing only. */
+    float *morph_weights;  /**< @brief Morphing only. */
+    int morph_target_count;
+    int is_morphing;
 } m3g_mesh_data;
+
+/** @brief CompositingMode object. */
+typedef struct m3g_compositing_mode_data {
+    m3g_object3d_meta object3d;
+    int depth_test_enabled;
+    int depth_write_enabled;
+    int color_write_enabled;
+    int alpha_write_enabled;
+    int blending;
+    int alpha_threshold; /**< @brief 0–255. */
+    float depth_offset_factor;
+    float depth_offset_units;
+} m3g_compositing_mode_data;
+
+/** @brief Sprite3D node. */
+typedef struct m3g_sprite3d_data {
+    m3g_node_meta node;
+    int image_id;
+    int appearance_id;
+    int is_scaled;
+    int crop_x, crop_y, crop_width, crop_height;
+} m3g_sprite3d_data;
 
 /** @brief AnimationController object. */
 typedef struct m3g_anim_controller_data {
@@ -692,6 +729,8 @@ typedef struct m3g_object {
         m3g_texture2d_data texture2d;
         m3g_image2d_data image2d;
         m3g_mesh_data mesh;
+        m3g_compositing_mode_data compositing_mode;
+        m3g_sprite3d_data sprite3d;
         m3g_anim_controller_data anim_controller;
         m3g_anim_track_data anim_track;
         m3g_keyframe_seq_data keyframe_seq;
@@ -1220,6 +1259,19 @@ M3G_API unsigned char *m3g_image_load_memory(unsigned char const *buffer, int le
     if (!io || !io->load_memory) { m3g__set_err("image load_memory not set"); return NULL; }
     return io->load_memory(buffer, len, width, height, channels_in_file, req_comp, io->user);
 }
+M3G_API unsigned char *m3g_image_load_file(char const *filename, int *width, int *height, int *channels_in_file, int req_comp) {
+    m3g_image_io const *io = m3g_get_image_io();
+    if (!io || !io->load_file) { m3g__set_err("image load_file not set"); return NULL; }
+    return io->load_file(filename, width, height, channels_in_file, req_comp, io->user);
+}
+M3G_API void m3g_rgb_to_float(m3g_rgb const *c, float out[3]) {
+    if (!c || !out) return;
+    out[0] = c->red / 255.f; out[1] = c->green / 255.f; out[2] = c->blue / 255.f;
+}
+M3G_API void m3g_rgba_to_float(m3g_rgba const *c, float out[4]) {
+    if (!c || !out) return;
+    out[0] = c->red / 255.f; out[1] = c->green / 255.f; out[2] = c->blue / 255.f; out[3] = c->alpha / 255.f;
+}
 M3G_API void m3g_image_free_pixels(void *pixels) {
     m3g_image_io const *io;
     if (!pixels) return;
@@ -1253,7 +1305,11 @@ M3G_API char const *m3g_type_name(int object_type) {
     case M3G_OBJ_VERTEX_BUFFER: return "VertexBuffer";
     case M3G_OBJ_WORLD: return "World";
     case M3G_OBJ_EXTERNAL_REFERENCE: return "ExternalReference";
-    default: return "Unknown";
+    default: {
+        static char buf[32];
+        snprintf(buf, sizeof(buf), "Type%d", object_type);
+        return buf;
+    }
     }
 }
 
@@ -1580,9 +1636,16 @@ static void m3g__object_free_contents(m3g_object *o) {
         M3G_FREE(o->u.image2d.pixels); break;
     case M3G_OBJ_MESH:
     case M3G_OBJ_SKINNED_MESH:
+    case M3G_OBJ_MORPHING_MESH:
         m3g__free_node(&o->u.mesh.node);
         M3G_FREE(o->u.mesh.submeshes);
-        M3G_FREE(o->u.mesh.bone_transforms); break;
+        M3G_FREE(o->u.mesh.bone_transforms);
+        M3G_FREE(o->u.mesh.morph_target_ids);
+        M3G_FREE(o->u.mesh.morph_weights); break;
+    case M3G_OBJ_COMPOSITING_MODE:
+        m3g__free_object3d(&o->u.compositing_mode.object3d); break;
+    case M3G_OBJ_SPRITE_3D:
+        m3g__free_node(&o->u.sprite3d.node); break;
     case M3G_OBJ_ANIMATION_CONTROLLER:
         m3g__free_object3d(&o->u.anim_controller.object3d); break;
     case M3G_OBJ_ANIMATION_TRACK:
@@ -1953,6 +2016,49 @@ static m3g_result m3g__parse_mesh(m3g_object *o, m3g__br *r, int skinned) {
     }
     return M3G_OK;
 }
+static m3g_result m3g__parse_morphing_mesh(m3g_object *o, m3g__br *r) {
+    uint32_t tc; int i; m3g_result rc;
+    rc = m3g__parse_mesh(o, r, 0); if (rc) return rc;
+    o->object_type = M3G_OBJ_MORPHING_MESH;
+    o->u.mesh.is_morphing = 1;
+    rc = m3g__read_u32(r, &tc); if (rc) return rc;
+    rc = m3g__checked_int(tc, &o->u.mesh.morph_target_count, "morph targets"); if (rc) return rc;
+    if (o->u.mesh.morph_target_count > 0) {
+        o->u.mesh.morph_target_ids = (int *)m3g__xmalloc((size_t)o->u.mesh.morph_target_count * sizeof(int));
+        o->u.mesh.morph_weights = (float *)m3g__xmalloc((size_t)o->u.mesh.morph_target_count * sizeof(float));
+        if (!o->u.mesh.morph_target_ids || !o->u.mesh.morph_weights) return M3G_ERR_NOMEM;
+        for (i = 0; i < o->u.mesh.morph_target_count; ++i) {
+            rc = m3g__read_objref(r, &o->u.mesh.morph_target_ids[i]); if (rc) return rc;
+            rc = m3g__read_f32(r, &o->u.mesh.morph_weights[i]); if (rc) return rc;
+        }
+    }
+    return M3G_OK;
+}
+static m3g_result m3g__parse_compositing_mode(m3g_object *o, m3g__br *r) {
+    uint8_t blend, ath; m3g_result rc;
+    o->object_type = M3G_OBJ_COMPOSITING_MODE;
+    rc = m3g__read_object3d(r, &o->u.compositing_mode.object3d); if (rc) return rc;
+    rc = m3g__read_bool(r, &o->u.compositing_mode.depth_test_enabled); if (rc) return rc;
+    rc = m3g__read_bool(r, &o->u.compositing_mode.depth_write_enabled); if (rc) return rc;
+    rc = m3g__read_bool(r, &o->u.compositing_mode.color_write_enabled); if (rc) return rc;
+    rc = m3g__read_bool(r, &o->u.compositing_mode.alpha_write_enabled); if (rc) return rc;
+    rc = m3g__read_u8(r, &blend); if (rc) return rc; o->u.compositing_mode.blending = blend;
+    rc = m3g__read_u8(r, &ath); if (rc) return rc; o->u.compositing_mode.alpha_threshold = ath;
+    rc = m3g__read_f32(r, &o->u.compositing_mode.depth_offset_factor); if (rc) return rc;
+    return m3g__read_f32(r, &o->u.compositing_mode.depth_offset_units);
+}
+static m3g_result m3g__parse_sprite3d(m3g_object *o, m3g__br *r) {
+    m3g_result rc;
+    o->object_type = M3G_OBJ_SPRITE_3D;
+    rc = m3g__read_node(r, &o->u.sprite3d.node); if (rc) return rc;
+    rc = m3g__read_objref(r, &o->u.sprite3d.image_id); if (rc) return rc;
+    rc = m3g__read_objref(r, &o->u.sprite3d.appearance_id); if (rc) return rc;
+    rc = m3g__read_bool(r, &o->u.sprite3d.is_scaled); if (rc) return rc;
+    rc = m3g__read_i32(r, &o->u.sprite3d.crop_x); if (rc) return rc;
+    rc = m3g__read_i32(r, &o->u.sprite3d.crop_y); if (rc) return rc;
+    rc = m3g__read_i32(r, &o->u.sprite3d.crop_width); if (rc) return rc;
+    return m3g__read_i32(r, &o->u.sprite3d.crop_height);
+}
 static m3g_result m3g__parse_anim_controller(m3g_object *o, m3g__br *r) {
     m3g_result rc;
     o->object_type = M3G_OBJ_ANIMATION_CONTROLLER;
@@ -2052,6 +2158,9 @@ static m3g_result m3g__parse_object(m3g_object *o, int type, uint8_t const *payl
     case M3G_OBJ_IMAGE_2D: rc = m3g__parse_image2d(o, &r); break;
     case M3G_OBJ_MESH: rc = m3g__parse_mesh(o, &r, 0); break;
     case M3G_OBJ_SKINNED_MESH: rc = m3g__parse_mesh(o, &r, 1); break;
+    case M3G_OBJ_MORPHING_MESH: rc = m3g__parse_morphing_mesh(o, &r); break;
+    case M3G_OBJ_COMPOSITING_MODE: rc = m3g__parse_compositing_mode(o, &r); break;
+    case M3G_OBJ_SPRITE_3D: rc = m3g__parse_sprite3d(o, &r); break;
     case M3G_OBJ_ANIMATION_CONTROLLER: rc = m3g__parse_anim_controller(o, &r); break;
     case M3G_OBJ_ANIMATION_TRACK: rc = m3g__parse_anim_track(o, &r); break;
     case M3G_OBJ_KEYFRAME_SEQUENCE: rc = m3g__parse_keyframe_seq(o, &r); break;
@@ -2298,7 +2407,8 @@ static m3g_node_meta *m3g__node_meta_of(m3g_object *o) {
     case M3G_OBJ_GROUP: case M3G_OBJ_WORLD: return &o->u.group.node;
     case M3G_OBJ_CAMERA: return &o->u.camera.node;
     case M3G_OBJ_LIGHT: return &o->u.light.node;
-    case M3G_OBJ_MESH: case M3G_OBJ_SKINNED_MESH: return &o->u.mesh.node;
+    case M3G_OBJ_MESH: case M3G_OBJ_SKINNED_MESH: case M3G_OBJ_MORPHING_MESH: return &o->u.mesh.node;
+    case M3G_OBJ_SPRITE_3D: return &o->u.sprite3d.node;
     default: return NULL;
     }
 }

@@ -742,13 +742,14 @@ void frame(void) {
     fd.dpi_scale = sapp_dpi_scale();
     simgui_new_frame(&fd);
     draw_ui();
+    simgui_flush();
 
     sg_pass pass = {};
     pass.action = g.pass_action;
     pass.swapchain = sglue_swapchain();
     sg_begin_pass(&pass);
     sgl_draw();
-    simgui_render();
+    simgui_draw();
     sg_end_pass();
     sg_commit();
 }

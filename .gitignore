@@ -4,6 +4,7 @@ tests/bin/
 compile_commands.json
 *.o
 *.a
+*.out
 .cache/
 cmake-build-*/
 
@@ -18,6 +19,7 @@ references/
 .zig-cache/
 zig-out/
 __pycache__
+*.out/
 
 # Others
 /*.glb

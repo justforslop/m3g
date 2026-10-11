@@ -1,30 +1,52 @@
-# Doxyfile for m3g — public API documentation
+# Doxyfile for m3g — Java API–style reference (JSR-184 / M3G 1.1)
 # Generate: make doc   (or: doxygen Doxyfile)
+#
+# Output layout mirrors classic javadoc / J2ME M3G HTML docs:
+#   package-like namespaces, class tree, member summary then detail,
+#   inheritance, alphabetical index — public surface only.
 
-PROJECT_NAME           = m3g
-PROJECT_BRIEF          = "JSR-184 / M3G decode (C99 m3g.h) and glTF convert (C++17 m3g.hpp)"
-PROJECT_NUMBER         =
-
+# ---------------------------------------------------------------------------
+# Project
+# ---------------------------------------------------------------------------
+PROJECT_NAME           = "javax.microedition.m3g"
+PROJECT_BRIEF          = "Mobile 3D Graphics API (M3G) 1.1 — C++17 binding of JSR-184 (m3g.hpp) and C99 decode (m3g.h)"
+PROJECT_NUMBER         = "1.1"
 OUTPUT_DIRECTORY       = docs/api
 CREATE_SUBDIRS         = NO
+OUTPUT_LANGUAGE        = English
 
-# Public APIs: C single-header + C++ amalgamated header.
+# ---------------------------------------------------------------------------
+# Input (public headers only — same surface as the Java package)
+# ---------------------------------------------------------------------------
 INPUT                  = include/m3g.h include/m3g.hpp
 FILE_PATTERNS          = *.hpp *.h
 RECURSIVE              = NO
+EXCLUDE_SYMBOLS        =
 
-EXTRACT_ALL            = NO
+# ---------------------------------------------------------------------------
+# Extraction — document the API like full Java class pages
+# ---------------------------------------------------------------------------
+EXTRACT_ALL            = YES
 EXTRACT_PRIVATE        = NO
 EXTRACT_STATIC         = YES
 EXTRACT_LOCAL_CLASSES  = YES
 EXTRACT_ANON_NSPACES   = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+HIDE_FRIEND_COMPOUNDS  = YES
+HIDE_IN_BODY_DOCS      = YES
+INTERNAL_DOCS          = NO
+CASE_SENSE_NAMES       = YES
 
+# ---------------------------------------------------------------------------
+# Preprocessing
 # Do NOT predefine M3G_HPP_INCLUDED / m3g_h — that empties the headers.
+# Never define M3G_DECODE_IMPL / M3G_IMPL: the implementation section must
+# stay out of the generated API (javadoc shows declarations, not .c bodies).
+# ---------------------------------------------------------------------------
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
-# Never define M3G_DECODE_IMPL / M3G_IMPL here: #ifdef would still be true if
-# the macro exists (even empty), and the implementation section would be parsed.
 PREDEFINED             = __cplusplus=201703L \
                          M3G_DECODE_API_DECL= \
                          M3G_API_DECL= \
@@ -33,45 +55,117 @@ PREDEFINED             = __cplusplus=201703L \
                          DOXYGEN=1
 SKIP_FUNCTION_MACROS   = YES
 
+# ---------------------------------------------------------------------------
+# Java / javadoc style presentation
+# ---------------------------------------------------------------------------
+# Namespaces → packages; class pages closer to Oracle/Sun javadoc.
+OPTIMIZE_OUTPUT_JAVA   = YES
+JAVADOC_AUTOBRIEF      = YES
+JAVADOC_BANNER         = NO
+QT_AUTOBRIEF           = NO
+# First sentence is the brief (package-summary / class summary style).
+BRIEF_MEMBER_DESC      = YES
+REPEAT_BRIEF           = YES
+ALWAYS_DETAILED_SEC    = NO
+INLINE_INHERITED_MEMB  = NO
+# Member summary tables then full detail (javadoc Method Summary / Detail).
+DISTRIBUTE_GROUP_DOC   = YES
+SUBGROUPING            = YES
+SEPARATE_MEMBER_PAGES  = NO
+# Sort like javadoc: types, then members alphabetically within groups.
+SORT_BRIEF_DOCS        = YES
+SORT_MEMBER_DOCS       = YES
+SORT_MEMBERS_CTORS_1ST = YES
+SORT_BY_SCOPE_NAME     = NO
+# Show full inheritance on class pages (extends chain).
+SHOW_USED_FILES        = NO
+SHOW_FILES             = YES
+SHOW_NAMESPACES        = YES
+INLINE_INFO            = YES
+# Inherited-from lists without dumping every base method inline.
+INHERIT_DOCS           = YES
+INLINE_SIMPLE_STRUCTS  = NO
+TYPEDEF_HIDES_STRUCT   = NO
+BUILTIN_STL_SUPPORT    = YES
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES
+# Constants / enums like Java static final fields.
+MAX_INITIALIZER_LINES  = 30
+
+# ---------------------------------------------------------------------------
+# HTML — tree + index (Frames / No Frames analogue)
+# ---------------------------------------------------------------------------
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_TREEVIEW      = YES
+FULL_SIDEBAR           = NO
+DISABLE_INDEX          = NO
+# Package / class alphabetical index (javadoc Index).
+ALPHABETICAL_INDEX     = YES
+IGNORE_PREFIX          =
+SEARCHENGINE           = YES
+HTML_COLORSTYLE_HUE    = 220
+HTML_COLORSTYLE_SAT    = 100
+HTML_COLORSTYLE_GAMMA  = 80
+HTML_DYNAMIC_MENUS     = YES
+HTML_DYNAMIC_SECTIONS  = NO
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+GENERATE_XML           = NO
+GENERATE_RTF           = NO
+
+# ---------------------------------------------------------------------------
+# Source browsing — off by default (javadoc is API-first, not source dump)
+# ---------------------------------------------------------------------------
+SOURCE_BROWSER         = NO
+INLINE_SOURCES         = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+REFERENCES_LINK_SOURCE = NO
+VERBATIM_HEADERS       = NO
+# Class / inheritance diagrams (Graphviz). Mirrors javadoc class hierarchy figures.
+HAVE_DOT               = YES
+DOT_PATH               =
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = NO
+UML_LOOK               = YES
+UML_LIMIT_NUM_FIELDS   = 15
+# Hide private/protected members in UML boxes (public API surface).
+DOT_UML_DETAILS        = NO
+GROUP_GRAPHS           = YES
+INCLUDE_GRAPH          = NO
+INCLUDED_BY_GRAPH      = NO
+# Full Object3D → … → Mesh tree on hierarchy.html and per-class pages.
+GRAPHICAL_HIERARCHY    = YES
+DIRECTORY_GRAPH        = NO
+TEMPLATE_RELATIONS     = NO
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+DOT_GRAPH_MAX_NODES    = 80
+MAX_DOT_GRAPH_DEPTH    = 0
+GENERATE_LEGEND        = YES
+DOT_CLEANUP            = YES
+
+# ---------------------------------------------------------------------------
+# Paths & noise
+# ---------------------------------------------------------------------------
+STRIP_FROM_PATH        = ./
+STRIP_FROM_INC_PATH    = include/
+TAB_SIZE               = 4
 QUIET                  = YES
 WARNINGS               = YES
 WARN_IF_UNDOCUMENTED   = NO
 WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
 WARN_LOGFILE           = docs/api/doxygen.warn
 
-GENERATE_HTML          = YES
-HTML_OUTPUT            = html
-GENERATE_TREEVIEW      = YES
-DISABLE_INDEX          = NO
-FULL_SIDEBAR           = NO
-SEARCHENGINE           = YES
-
-GENERATE_LATEX         = NO
-GENERATE_MAN           = NO
-GENERATE_XML           = NO
-
-SOURCE_BROWSER         = YES
-INLINE_SOURCES         = NO
-REFERENCED_BY_RELATION = NO
-REFERENCES_RELATION    = NO
-VERBATIM_HEADERS       = YES
-
-HAVE_DOT               = NO
-
-JAVADOC_AUTOBRIEF      = YES
-BUILTIN_STL_SUPPORT    = YES
-TYPEDEF_HIDES_STRUCT   = NO
-MARKDOWN_SUPPORT       = YES
-
-TAB_SIZE               = 4
-SORT_MEMBER_DOCS       = YES
-SORT_BRIEF_DOCS        = NO
-
-STRIP_FROM_PATH        = ./
-STRIP_FROM_INC_PATH    = include/
-
-# Show modules (@defgroup) in the nav tree.
-GENERATE_TODOLIST      = NO
-SHOW_NAMESPACES        = YES
-
+# Hide toolkit/impl noise from the “Java package” view if symbols leak.
+# (Empty = show all extracted public API.)
 EXCLUDE_SYMBOLS        =
+
+GENERATE_TODOLIST      = NO
+GENERATE_TESTLIST      = NO
+GENERATE_BUGLIST       = NO
+GENERATE_DEPRECATEDLIST = YES

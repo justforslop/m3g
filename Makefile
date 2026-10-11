@@ -1,8 +1,8 @@
 # m3g — M3G decoder / glTF converter (C++17)
 #
 # Build:
-#   make            # viewer -> build/debug     (default: C API / debug-c)
-#   make debug      # same as make debug-c
+#   make            # viewer -> build/debug     (default: C++ API / debug-cpp)
+#   make debug      # same as make debug-cpp
 #   make debug-c    # viewer -> build/debug-c   (m3g.h / src/debug.c)
 #   make debug-cpp  # viewer -> build/debug-cpp (m3g.hpp / src/debug.cpp)
 #   make view       # same as make debug
@@ -26,7 +26,7 @@
 #   zig build -p build / lib / debug / view / release / test / setup / doc
 #
 # Viewer:
-#   ./build/debug assets/90.m3g       # default (C API)
+#   ./build/debug assets/90.m3g       # default (C++ API)
 #   ./build/debug-c assets/90.m3g
 #   ./build/debug-cpp assets/90.m3g
 #
@@ -189,14 +189,14 @@ IMGUI_OBJS := $(patsubst vendors/imgui/%.cpp,$(OBJDIR)/imgui/%.o,$(IMGUI_SRCS))
 
 all: debug
 
-# Default viewer = C API (m3g.h). Also installs build/debug alongside build/debug-c.
-debug view: debug-c
+# Default viewer = C++ API (m3g.hpp). Also installs build/debug alongside build/debug-cpp.
+debug view: debug-cpp
 
 debug-c:
-	@$(MAKE) --no-print-directory BUILD=debug $(DEBUG_BIN_C) $(DEBUG_BIN)
+	@$(MAKE) --no-print-directory BUILD=debug $(DEBUG_BIN_C)
 
 debug-cpp:
-	@$(MAKE) --no-print-directory BUILD=debug $(DEBUG_BIN_CPP)
+	@$(MAKE) --no-print-directory BUILD=debug $(DEBUG_BIN_CPP) $(DEBUG_BIN)
 
 release:
 	@$(MAKE) --no-print-directory BUILD=release $(BIN)
@@ -257,20 +257,20 @@ $(BIN): $(OBJS) | $(BUILDROOT)
 	@echo "LD  $@"
 	$(CXX) $(APP_CXXFLAGS) -o $@ $(OBJS) $(APP_LDFLAGS) $(APP_LIBS)
 
-# C API viewer (src/debug.c + m3g.h). Default `make debug` / `make view`.
+# C API viewer (src/debug.c + m3g.h).
 $(DEBUG_BIN_C): $(VIEW_LIB_OBJS) $(VIEW_DEBUG_C_OBJ) $(IMGUI_OBJS) | $(BUILDROOT)
 	@echo "LD  $@"
 	$(CXX) $(APP_CXXFLAGS) -o $@ $(VIEW_LIB_OBJS) $(VIEW_DEBUG_C_OBJ) $(IMGUI_OBJS) $(APP_LDFLAGS) $(VIEW_LIBS)
 
-# Stable path used by docs / historical scripts (same binary as debug-c).
-$(DEBUG_BIN): $(DEBUG_BIN_C)
-	@echo "CP  $@  <-  $(DEBUG_BIN_C)"
-	cp -f $(DEBUG_BIN_C) $@
-
-# C++ API viewer (src/debug.cpp + m3g.hpp).
+# C++ API viewer (src/debug.cpp + m3g.hpp). Default `make debug` / `make view`.
 $(DEBUG_BIN_CPP): $(VIEW_LIB_OBJS) $(VIEW_DEBUG_CPP_OBJ) $(IMGUI_OBJS) | $(BUILDROOT)
 	@echo "LD  $@"
 	$(CXX) $(APP_CXXFLAGS) -o $@ $(VIEW_LIB_OBJS) $(VIEW_DEBUG_CPP_OBJ) $(IMGUI_OBJS) $(APP_LDFLAGS) $(VIEW_LIBS)
+
+# Stable path used by docs / historical scripts (same binary as debug-cpp).
+$(DEBUG_BIN): $(DEBUG_BIN_CPP)
+	@echo "CP  $@  <-  $(DEBUG_BIN_CPP)"
+	cp -f $(DEBUG_BIN_CPP) $@
 
 # debug.c is C++ (ImGui/sokol) + portable C m3g.h decode API.
 $(VIEW_DEBUG_C_OBJ): $(SRCDIR)/debug.c
@@ -430,21 +430,30 @@ TEST_CXXFLAGS := -std=c++17 -Wall -Wextra -g -D_DEFAULT_SOURCE $(M3G_BACKEND_DEF
 TEST_INCLUDES := -I. -Iinclude -Ivendors/libs
 TEST_M3G_INCLUDES := -I. -Iinclude -Isrc -Ivendors -Ivendors/libs -Ivendors/cgltf -Ivendors/miniz
 TEST_IMPL := tests/impl.c
-# Library sources for C++ tests that need m3g (adapters auto-install backends).
-TEST_M3G_SRCS := \
+# Shared m3g + backend sources for C++ tests (built once into TEST_OBJDIR).
+TEST_M3G_CXX_SRCS := \
 	src/converter.cpp \
 	src/decode/decoder.cpp \
-	src/deflate_io_miniz.c src/io_adapters_cxx.cpp \
+	src/io_adapters_cxx.cpp \
 	src/export/gltf_exporter.cpp \
 	src/gltf/gltf_writer.cpp \
+	src/util/png_writer.cpp
+TEST_M3G_C_SRCS := \
+	src/m3g_impl.c \
+	src/deflate_io_miniz.c \
 	src/gltf_io_cgltf.c \
 	src/image_io_stb.c \
 	src/json_io_cjson.c \
-	src/util/png_writer.cpp \
 	src/impl.c \
 	vendors/cjson/cJSON.c \
 	vendors/miniz/miniz.c
 TEST_M3G_LIBS := -lm
+TEST_OBJDIR := $(TEST_BINDIR)/obj
+# Map source path -> object under TEST_OBJDIR (src/foo.c -> tests/bin/obj/src/foo.o).
+TEST_M3G_C_OBJS := $(patsubst %.c,$(TEST_OBJDIR)/%.o,$(TEST_M3G_C_SRCS))
+TEST_M3G_CXX_OBJS := $(patsubst %.cpp,$(TEST_OBJDIR)/%.o,$(TEST_M3G_CXX_SRCS))
+TEST_M3G_OBJS := $(TEST_M3G_C_OBJS) $(TEST_M3G_CXX_OBJS)
+TEST_IMPL_OBJ := $(TEST_OBJDIR)/tests/impl.o
 ifeq ($(CROSS_COMPILE),)
 TEST_CC ?= $(shell command -v musl-gcc 2>/dev/null || command -v x86_64-linux-musl-gcc 2>/dev/null || echo "$(CC)")
 else
@@ -452,7 +461,28 @@ TEST_CC ?= $(CC)
 endif
 TEST_CXX ?= $(CXX)
 
-test:
+# Shared C backends / m3g impl (one .o per source, reused by every C++ test).
+$(TEST_OBJDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "CC  $<  (test-lib)"
+	$(CC) $(TEST_CFLAGS) $(TEST_M3G_INCLUDES) -c -o $@ $<
+
+$(TEST_OBJDIR)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX $<  (test-lib)"
+	$(TEST_CXX) $(TEST_CXXFLAGS) $(TEST_M3G_INCLUDES) -c -o $@ $<
+
+# testfw implementation (C source compiled as C++ so symbols match C++ tests).
+$(TEST_IMPL_OBJ): $(TEST_IMPL)
+	@mkdir -p $(dir $@)
+	@echo "CXX $<  (testfw)"
+	$(TEST_CXX) $(TEST_CXXFLAGS) $(TEST_M3G_INCLUDES) -x c++ -c -o $@ $<
+
+test-lib: $(TEST_M3G_OBJS) $(TEST_IMPL_OBJ)
+
+.PHONY: test-lib
+
+test: test-lib
 	@mkdir -p $(TEST_BINDIR)
 	@failed=0; \
 	use_n=0; \
@@ -491,7 +521,7 @@ test:
 		if [ "$$lang" = cpp ]; then \
 			echo "CXX $(TEST_BINDIR)/$$base  [$(TEST_CXX)]"; \
 			$(TEST_CXX) $(TEST_CXXFLAGS) $(TEST_M3G_INCLUDES) -o $(TEST_BINDIR)/$$base \
-				$$src $(TEST_IMPL) $(TEST_M3G_SRCS) $(TEST_M3G_LIBS) || exit 1; \
+				$$src $(TEST_IMPL_OBJ) $(TEST_M3G_OBJS) $(TEST_M3G_LIBS) || exit 1; \
 		else \
 			echo "CC  $(TEST_BINDIR)/$$base  [$(TEST_CC)]"; \
 			$(TEST_CC) $(TEST_CFLAGS) $(TEST_INCLUDES) -o $(TEST_BINDIR)/$$base $$src $(TEST_IMPL) || exit 1; \

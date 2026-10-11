@@ -1,38 +1,40 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// m3g — M3G decoder / glTF converter (C++17)
+// m3g — JSR-184 / M3G decode + glTF convert
 //
-// Portable build driver (Linux + Windows + cross) and Zig package.
-// Make remains available on POSIX.
+// Portable build (Linux + Windows + cross). Make remains available on POSIX.
 //
-//   zig build                 # viewer → <prefix>/debug
+//   zig build                 # viewer → <prefix>/debug  (C++ / m3g.hpp)
 //   zig build debug|view      # same
+//   zig build debug-cpp       # viewer (explicit C++ API)
+//   zig build debug-c         # viewer (C API / m3g.h / src/debug.c)
 //   zig build release         # CLI    → <prefix>/m3g
 //   zig build lib             # static libm3g + public headers
 //   zig build test            # unit tests (-Dn=1,2 / -Ds=1)
-//   zig build setup           # fetch vendors (needs python3, 7z for zips)
+//   zig build setup           # fetch vendors (python + 7z for zips)
 //   zig build doc             # Doxygen → docs/api/html
 //
 // As a dependency (build.zig.zon → zig fetch):
 //   const m3g = b.dependency("m3g", .{ .target = target, .optimize = optimize });
 //   exe.linkLibrary(m3g.artifact("m3g"));
-//   // public headers (m3g.h / m3g.hpp) come with the artifact
+//   // public headers: m3g.h / m3g.hpp
 //
-// Install next to Make/Ninja outputs:
+// Install next to Make outputs:
 //   zig build -p build
 //   zig build -p build release
 //   zig build -p build lib
 //
-// Windows / cross examples:
+// Cross examples:
 //   zig build -p build release -Dtarget=x86_64-windows-gnu
-//   zig build -p build -Dtarget=x86_64-windows-gnu
 //   zig build -p build release -Dtarget=aarch64-linux-gnu
 //
-// Default prefix is zig-out/ (binaries placed at prefix root, not prefix/bin).
+// Default prefix is zig-out/ (binaries at prefix root, not prefix/bin).
 
 const app_name = "m3g";
+const app_version = std.SemanticVersion{ .major = 0, .minor = 2, .patch = 0 };
 
+/// C++ library sources (decode wrapper, export, IO adapters).
 const lib_cpp_sources = [_][]const u8{
     "src/converter.cpp",
     "src/decode/decoder.cpp",
@@ -42,9 +44,10 @@ const lib_cpp_sources = [_][]const u8{
     "src/util/png_writer.cpp",
 };
 
+/// C library sources (m3g.h implementation + backends).
 const lib_c_sources = [_][]const u8{
-    "src/impl.c",
     "src/m3g_impl.c",
+    "src/impl.c",
     "src/deflate_io_miniz.c",
     "src/image_io_stb.c",
     "src/json_io_cjson.c",
@@ -54,7 +57,7 @@ const lib_c_sources = [_][]const u8{
     "vendors/miniz/miniz.c",
 };
 
-// Match CMake M3G_BUNDLE_* defaults for the full package artifact.
+/// Match CMake M3G_BUNDLE_* / Makefile M3G_BACKEND_DEFS defaults.
 const lib_backend_macros = [_]struct { []const u8, []const u8 }{
     .{ "M3G_HAS_MINIZ_BACKEND", "1" },
     .{ "M3G_HAS_STB_BACKEND", "1" },
@@ -78,7 +81,6 @@ const imgui_tag = "1.92.9b";
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    // Host Python argv prefix (Windows often has `python` / `py -3`, not `python3`).
     const py_opt = b.option([]const u8, "py", "Python interpreter (default: auto-detect python3/python/py)");
     const py = resolvePython(b, py_opt);
     const n_opt = b.option([]const u8, "n", "Comma-separated test numbers (e.g. 1 or 2,3)");
@@ -91,8 +93,7 @@ pub fn build(b: *std.Build) void {
     const app_inc = [_][]const u8{ ".", "include", "src", "vendors", "vendors/cgltf", "vendors/libs", "vendors/miniz" };
     const view_inc = [_][]const u8{ ".", "include", "src", "vendors", "vendors/cgltf", "vendors/libs", "vendors/miniz", "vendors/imgui" };
 
-    // Package / CLI: size-optimized when -Doptimize is left at default Debug (historical release).
-    // Explicit -Doptimize=ReleaseFast|ReleaseSafe|… is honored for artifact "m3g".
+    // Package / CLI: size-optimized when -Doptimize is left at default Debug.
     const lib_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseSmall else optimize;
     const lib_cpp_flags = makeCppFlags(b, false, is_linux);
     const lib_c_flags = makeCFlags(b, false, is_linux);
@@ -100,8 +101,6 @@ pub fn build(b: *std.Build) void {
     const view_c_flags = makeCFlags(b, true, is_linux);
 
     // ---- Package library (artifact "m3g") ----
-    // Static C++17 library: decode + convert + default IO adapters (miniz/stb/cJSON/cgltf).
-    // Consumers: dep.artifact("m3g") then linkLibrary; public headers travel with the artifact.
     const lib_mod = b.createModule(.{
         .root_source_file = null,
         .target = target,
@@ -120,16 +119,14 @@ pub fn build(b: *std.Build) void {
         .name = app_name,
         .linkage = .static,
         .root_module = lib_mod,
-        .version = .{ .major = 0, .minor = 1, .patch = 0 },
+        .version = app_version,
     });
     lib.installHeader(b.path("include/m3g.h"), "m3g.h");
     lib.installHeader(b.path("include/m3g.hpp"), "m3g.hpp");
 
-    // Must hang off the install step so b.dependency(...).artifact("m3g") can resolve it.
-    // Named "m3g" — do not install the CLI (also named m3g) on this step (ambiguous).
     const install_lib = b.addInstallArtifact(lib, .{});
     b.getInstallStep().dependOn(&install_lib.step);
-    const lib_step = b.step("lib", "Build and install static libm3g + public headers");
+    const lib_step = b.step("lib", "Build and install static libm3g + public headers (m3g.h / m3g.hpp)");
     lib_step.dependOn(&install_lib.step);
 
     // ---- CLI ----
@@ -143,6 +140,7 @@ pub fn build(b: *std.Build) void {
     addIncludes(cli_mod, b, &app_inc);
     cli_mod.addCMacro("APP_NAME", b.fmt("\"{s}\"", .{app_name}));
     if (is_linux) cli_mod.addCMacro("_DEFAULT_SOURCE", "1");
+    for (lib_backend_macros) |m| cli_mod.addCMacro(m[0], m[1]);
     cli_mod.addCSourceFile(.{ .file = b.path("src/main.cpp"), .flags = lib_cpp_flags, .language = .cpp });
     cli_mod.linkLibrary(lib);
     if (!is_windows) cli_mod.linkSystemLibrary("m", .{});
@@ -157,43 +155,65 @@ pub fn build(b: *std.Build) void {
     const release_step = b.step("release", "Build CLI converter (m3g)");
     release_step.dependOn(&install_cli.step);
 
-    // ---- Viewer ----
-    // Own Debug compile of library sources (prior behavior: -O0 -g for viewer).
-    const view_mod = b.createModule(.{
-        .root_source_file = null,
-        .target = target,
-        .optimize = .Debug,
-        .link_libc = true,
-        .link_libcpp = true,
-    });
-    addIncludes(view_mod, b, &view_inc);
-    view_mod.addCMacro("APP_NAME", b.fmt("\"{s}\"", .{app_name}));
-    if (is_linux) view_mod.addCMacro("_DEFAULT_SOURCE", "1");
-    for (lib_backend_macros) |m| view_mod.addCMacro(m[0], m[1]);
-    addCppSources(view_mod, b, &lib_cpp_sources, view_cpp_flags);
-    addCSources(view_mod, b, &lib_c_sources, view_c_flags);
-    view_mod.addCSourceFile(.{
-        .file = b.path("src/debug.cpp"),
-        .flags = view_cpp_flags,
-        .language = .cpp,
-    });
-    addCppSources(view_mod, b, &imgui_sources, view_cpp_flags);
-    if (!is_windows) view_mod.linkSystemLibrary("m", .{});
-    linkViewer(view_mod, os);
-
-    const viewer = b.addExecutable(.{
+    // ---- Viewer (C++ API — default, matches Make `debug`) ----
+    const viewer_cpp = addViewer(b, .{
         .name = "debug",
-        .root_module = view_mod,
+        .source = "src/debug.cpp",
+        .target = target,
+        .inc = &view_inc,
+        .cpp_flags = view_cpp_flags,
+        .c_flags = view_c_flags,
+        .is_windows = is_windows,
+        .is_linux = is_linux,
+        .os = os,
     });
-    const install_view = b.addInstallArtifact(viewer, .{
+    const install_view = b.addInstallArtifact(viewer_cpp, .{
         .dest_dir = .{ .override = .prefix },
     });
-    const debug_step = b.step("debug", "Build Sokol + ImGui viewer");
+
+    const viewer_cpp_named = addViewer(b, .{
+        .name = "debug-cpp",
+        .source = "src/debug.cpp",
+        .target = target,
+        .inc = &view_inc,
+        .cpp_flags = view_cpp_flags,
+        .c_flags = view_c_flags,
+        .is_windows = is_windows,
+        .is_linux = is_linux,
+        .os = os,
+    });
+    const install_view_cpp_art = b.addInstallArtifact(viewer_cpp_named, .{
+        .dest_dir = .{ .override = .prefix },
+    });
+
+    const debug_step = b.step("debug", "Build Sokol + ImGui viewer (C++ / m3g.hpp → debug)");
     debug_step.dependOn(&install_view.step);
     const view_step = b.step("view", "Alias for debug (viewer)");
     view_step.dependOn(debug_step);
+    const debug_cpp_step = b.step("debug-cpp", "Build C++ API viewer (debug-cpp)");
+    debug_cpp_step.dependOn(&install_view_cpp_art.step);
+    debug_cpp_step.dependOn(&install_view.step);
 
-    // Default install = viewer (matches Make/Ninja `all`) + package lib for artifact()
+    // ---- Viewer (C API — m3g.h / src/debug.c) ----
+    const viewer_c = addViewer(b, .{
+        .name = "debug-c",
+        .source = "src/debug.c",
+        .source_as_cpp = true, // ImGui/sokol helpers; same as Make -x c++
+        .target = target,
+        .inc = &view_inc,
+        .cpp_flags = view_cpp_flags,
+        .c_flags = view_c_flags,
+        .is_windows = is_windows,
+        .is_linux = is_linux,
+        .os = os,
+    });
+    const install_view_c = b.addInstallArtifact(viewer_c, .{
+        .dest_dir = .{ .override = .prefix },
+    });
+    const debug_c_step = b.step("debug-c", "Build C API viewer (m3g.h / src/debug.c → debug-c)");
+    debug_c_step.dependOn(&install_view_c.step);
+
+    // Default install = C++ viewer + package lib (matches Make `all`)
     b.getInstallStep().dependOn(&install_view.step);
 
     addSetupSteps(b, py);
@@ -201,10 +221,48 @@ pub fn build(b: *std.Build) void {
     addTestStep(b, py, n_opt, s_opt);
 }
 
-/// Resolve a host Python invocation as an argv prefix.
-/// Windows: prefer `python.exe`, then `python3.exe`, then `py.exe -3`.
-/// POSIX: prefer `python3`, then `python`.
-/// `-Dpy=...` overrides (use `-Dpy=py` for the Windows launcher → `py -3`).
+const ViewerOpts = struct {
+    name: []const u8,
+    source: []const u8,
+    source_as_cpp: bool = true,
+    target: std.Build.ResolvedTarget,
+    inc: []const []const u8,
+    cpp_flags: []const []const u8,
+    c_flags: []const []const u8,
+    is_windows: bool,
+    is_linux: bool,
+    os: std.Target.Os.Tag,
+};
+
+fn addViewer(b: *std.Build, opts: ViewerOpts) *std.Build.Step.Compile {
+    const mod = b.createModule(.{
+        .root_source_file = null,
+        .target = opts.target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .link_libcpp = true,
+    });
+    addIncludes(mod, b, opts.inc);
+    mod.addCMacro("APP_NAME", b.fmt("\"{s}\"", .{app_name}));
+    if (opts.is_linux) mod.addCMacro("_DEFAULT_SOURCE", "1");
+    for (lib_backend_macros) |m| mod.addCMacro(m[0], m[1]);
+    addCppSources(mod, b, &lib_cpp_sources, opts.cpp_flags);
+    addCSources(mod, b, &lib_c_sources, opts.c_flags);
+    mod.addCSourceFile(.{
+        .file = b.path(opts.source),
+        .flags = opts.cpp_flags,
+        .language = if (opts.source_as_cpp) .cpp else .c,
+    });
+    addCppSources(mod, b, &imgui_sources, opts.cpp_flags);
+    if (!opts.is_windows) mod.linkSystemLibrary("m", .{});
+    linkViewer(mod, opts.os);
+
+    return b.addExecutable(.{
+        .name = opts.name,
+        .root_module = mod,
+    });
+}
+
 fn resolvePython(b: *std.Build, override: ?[]const u8) []const []const u8 {
     if (override) |user| {
         if (std.mem.eql(u8, user, "py") or std.mem.eql(u8, user, "py.exe")) {
@@ -230,7 +288,6 @@ fn resolvePython(b: *std.Build, override: ?[]const u8) []const []const u8 {
         return b.dupeStrings(&.{path});
     } else |_| {}
 
-    // Last resort: still emit a sensible default so the error message is clear.
     if (host_win) return b.dupeStrings(&.{"python"});
     return b.dupeStrings(&.{"python3"});
 }
@@ -282,7 +339,7 @@ fn addCSources(mod: *std.Build.Module, b: *std.Build, files: []const []const u8,
 fn linkViewer(mod: *std.Build.Module, os: std.Target.Os.Tag) void {
     switch (os) {
         .windows => {
-            // SOKOL_D3D11 (see src/debug.cpp) — not WGL/opengl32.
+            // SOKOL_D3D11 (see src/debug.cpp / debug.c)
             mod.linkSystemLibrary("d3d11", .{});
             mod.linkSystemLibrary("dxgi", .{});
             mod.linkSystemLibrary("user32", .{});
@@ -291,7 +348,6 @@ fn linkViewer(mod: *std.Build.Module, os: std.Target.Os.Tag) void {
             mod.linkSystemLibrary("kernel32", .{});
         },
         else => {
-            // Linux / *BSD: Sokol GLCORE + X11
             mod.linkSystemLibrary("GL", .{});
             mod.linkSystemLibrary("X11", .{});
             mod.linkSystemLibrary("Xi", .{});
@@ -342,7 +398,7 @@ fn addSetupSteps(b: *std.Build, py: []const []const u8) void {
         }
     };
 
-    const setup_libs = b.step("setup-libs", "Fetch testfw.h");
+    const setup_libs = b.step("setup-libs", "Fetch testfw.h (+ vecmath.h if missing)");
     setup_libs.dependOn(Curl.stamp(b, py, "libs-testfw.h", "https://raw.githubusercontent.com/mattiasgustavsson/libs/refs/heads/main/testfw.h", "vendors/libs/testfw.h"));
 
     const setup_cgltf = b.step("setup-cgltf", "Fetch cgltf headers");
@@ -425,13 +481,12 @@ fn addTestStep(b: *std.Build, py: []const []const u8, n_opt: ?[]const u8, s_opt:
     run.setEnvironmentVariable("TEST_CC", b.graph.zig_exe);
     run.setEnvironmentVariable("TEST_CXX", b.graph.zig_exe);
     run.setEnvironmentVariable("TEST_USE_ZIG", "1");
-    // Empty default on Windows avoids a failing `-lm` with some toolchains; override via env.
     if (builtin.os.tag == .windows) {
         run.setEnvironmentVariable("TEST_M3G_LIBS", "");
     }
     if (n_opt) |n| run.setEnvironmentVariable("n", n);
     if (s_opt) |s| run.setEnvironmentVariable("s", s);
 
-    const test_step = b.step("test", "Compile and run unit tests (-Dn= / -Ds= filters)");
+    const test_step = b.step("test", "Compile and run unit tests (-Dn= / -Ds= filters); shared objs in tests/bin/obj");
     test_step.dependOn(&run.step);
 }

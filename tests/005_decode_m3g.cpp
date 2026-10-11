@@ -32,10 +32,10 @@ int main(void)
         m3g::decode::Decoded d = dec.decode_file(asset.string());
 
         TESTFW_EXPECTED(!d.source_path.empty());
-        TESTFW_EXPECTED(d.file.header != nullptr || !d.file.objects_by_id.empty());
+        TESTFW_EXPECTED(!d.objects_by_id.empty() || !d.roots.empty());
         TESTFW_EXPECTED(d.node_count() > 0u);
         TESTFW_EXPECTED(d.mesh_count() > 0u);
-        TESTFW_EXPECTED(d.file.world_or_null() != nullptr);
+        TESTFW_EXPECTED(d.world_or_null() != nullptr);
     }
     TESTFW_TEST_END();
 
