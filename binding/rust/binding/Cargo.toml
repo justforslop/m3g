@@ -1,0 +1,17 @@
+[package]
+name = "m3g-rs-binding"
+version = "0.1.0"
+edition = "2024"
+build="build.rs"
+
+[dependencies]
+libc="0.2"
+
+[build-dependencies]
+cc = "1.0"
+bindgen = "0.72"
+
+[features]
+default = ["miniz", "stb-image"]
+miniz = []
+stb-image = []
