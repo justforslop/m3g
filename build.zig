@@ -400,6 +400,7 @@ fn addSetupSteps(b: *std.Build, py: []const []const u8) void {
 
     const setup_libs = b.step("setup-libs", "Fetch testfw.h (+ vecmath.h if missing)");
     setup_libs.dependOn(Curl.stamp(b, py, "libs-testfw.h", "https://raw.githubusercontent.com/mattiasgustavsson/libs/refs/heads/main/testfw.h", "vendors/libs/testfw.h"));
+    setup_libs.dependOn(Curl.stamp(b, py, "vecmath.h", "https://raw.githubusercontent.com/mattiasgustavsson/libs/refs/heads/main/vecmath.h", "vendors/libs/vecmath.h"));
 
     const setup_cgltf = b.step("setup-cgltf", "Fetch cgltf headers");
     setup_cgltf.dependOn(Curl.stamp(b, py, "cgltf.h", "https://raw.githubusercontent.com/jkuhlmann/cgltf/refs/heads/master/cgltf.h", "vendors/cgltf/cgltf.h"));
