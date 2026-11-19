@@ -437,8 +437,8 @@ void create_gpu_images() {
         desc.width = emb.width;
         desc.height = emb.height;
         desc.pixel_format = SG_PIXELFORMAT_RGBA8;
-        desc.data.mip_levels[0].ptr = emb.pixels.data();
-        desc.data.mip_levels[0].size = emb.pixels.size();
+        desc.data.ptr = emb.pixels.data();
+        desc.data.size = emb.pixels.size();
         g.gpu_images[i].img = sg_make_image(&desc);
 
         sg_view_desc view = {};
