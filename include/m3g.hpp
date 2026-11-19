@@ -1847,7 +1847,37 @@ namespace m3g {
 #ifdef M3G_DECODE_IMPL
 #ifndef M3G_DECODE_IMPL_INCLUDED
 #define M3G_DECODE_IMPL_INCLUDED
-
+/* ==========================================================================
+ * IMPLEMENTATION NOTES (C++ binding)
+ *
+ * Two stores per IO backend: each backend (deflate, image, json, gltf) keeps
+ *   a C++-side `*_store()` AND mirrors it into the C decoder through
+ *   m3g_set_*_io(). set_*_io() MUST update both or decode silently fails.
+ *   See sync_deflate() / sync_image() below.
+ *
+ * Two-pass graph build: make_object() allocates one C++ instance per parsed
+ *   M3G object but wires NOTHING - no children, no tracks, no mesh
+ *   submeshes. wire_graph() is the second pass that connects references
+ *   by object id. This is deliberate: M3G allows forward references and
+ *   cycles, so we cannot populate links until every object exists.
+ *
+ * Ownership: decoded objects are std::shared_ptr<Object3D>. The
+ *   decode::Decoded struct owns the root set (roots, objects_by_id,
+ *   world) AND the parallel scene::SceneIr. When a Decoded goes out of
+ *   scope, everything is freed in one shot - there is no partial
+ *   teardown path for the C++ side. The C side (m3g_file) is still
+ *   freed separately inside decode_file().
+ *
+ * Exceptions: unlike the C API (returns m3g_result), the C++ wrappers
+ *   throw std::runtime_error on backend failure, std::invalid_argument
+ *   on null/spec violations, std::out_of_range on bad indices. Callers
+ *   that want the m3g_result style should use the m3g.h API directly.
+ *
+ * Stubs: a few functions are intentionally inert for the toolkit
+ *   (Transform::invert, Graphics3D::render, SkinnedMesh::getBoneTransform,
+ *   Group::pick). They are marked with explicit `TODO:` comments. Do not
+ *   silently rely on them for anything but tests.
+ * ========================================================================== */
 #include <filesystem>
 
 namespace m3g {
@@ -1869,7 +1899,17 @@ namespace m3g {
             static GltfIo s{};
             return s;
         }
-
+        /* Mirror a C++ DeflateIo into the C decoder's m3g_deflate_io.
+         *
+         * The project has two parallel API surfaces (m3g.h and m3g.hpp) and the
+         * decode path lives in C. When the application calls m3g::set_deflate_io(),
+         * we (a) store the C++ copy so m3g::deflate_io() can return it, and
+         * (b) forward into m3g_set_deflate_io() so the C decoder sees the same
+         * callbacks. Forgetting (b) makes decode fail with "callback not set"
+         * at runtime even though m3g::deflate_io() looks configured.
+         *
+         * Field mapping is 1:1 by name; new fields must be added on BOTH sides
+         * and copied here, or they will silently default to nullptr on the C side. */
         void sync_deflate(DeflateIo const &io) {
             m3g_deflate_io c{};
             c.adler32 = io.adler32;
@@ -1879,6 +1919,7 @@ namespace m3g {
             c.user = io.user;
             m3g_set_deflate_io((io.adler32 || io.uncompress) ? &c : nullptr);
         }
+        /* Mirror ImageIo the same way as sync_deflate(). See the note there. */
         void sync_image(ImageIo const &io) {
             m3g_image_io c{};
             c.load_file = io.load_file;
@@ -2017,6 +2058,16 @@ namespace m3g {
         io->free_print(p, io->user);
     }
 
+    /* Build the composed matrix by delegating to the C decoder's
+    * m3g_node_matrix() - the C side is the single source of truth for how
+    * component TRS and the general 4x4 combine (component first, then
+    * general; see m3g.h -> m3g__component_to_rm).
+    *
+    * The C++ class keeps has_matrix_ and has_component_ as separate flags
+    * (matching the binary format), so we stage them into an m3g_node_meta
+    * before calling. All zeroing of the meta is done here - do NOT reuse a
+    * stack meta and skip memset; m3g_node_matrix() reads has_general_transform
+    * and component.present, and stale 1s would produce wrong output. */
     void Transformable::getCompositeTransform(float *m16) const {
         m3g_node_meta n{};
         if (has_matrix_) {
@@ -2040,6 +2091,22 @@ namespace m3g {
         transform->set(m);
     }
 
+    /* TODO: This is a stub. It always sets the identity matrix regardless of
+    * input. The comment inside the body ("leave identity for singular
+    * toolkit cases") was aspirational: no affine inversion is implemented.
+    *
+    * Consequences:
+    *   - Any code path that calls invert() to undo a transform gets the
+    *     identity back, silently producing wrong geometry.
+    *   - Tests that rely on invert() must not assume correctness.
+    *
+    * To fix: implement the standard affine 4x4 inverse (or general 4x4
+    * via adjugate). The C math backend (m3g_math_io) does not currently
+    * provide an inverse - adding m3g_mat4_invert() there and calling it
+    * here is the cleanest path.
+    *
+    * Do NOT remove this function without also removing the public
+    * declaration - it is part of the Java-style API surface. */
     void Transform::invert() {
         /* simple adjoint for affine 4x4; identity fallback */
         float inv[16];
@@ -2126,6 +2193,29 @@ namespace m3g {
             dst.setScope(static_cast<int>(m.scope));
         }
 
+        /* First pass of the two-pass graph build: allocate a C++ instance for
+        * one parsed m3g_object. No cross-references are wired here.
+        *
+        * Coverage contract:
+        *   - Every M3G_OBJ_* value has a case. The default branch creates a
+        *     bare Object3D with only object_type_/object_id_ set, so unknown
+        *     types do not crash but also carry no data.
+        *   - Mesh / SkinnedMesh / MorphingMesh share one case: the mesh-typed
+        *     fields (submeshes_, appearances_) are sized but left empty.
+        *     wire_graph() later fills them from the parsed id references.
+        *   - SkinnedMesh bones_ and MorphingMesh targets_ are NOT populated
+        *     here; the C struct's bone_transforms / morph_target_ids are
+        *     copied into the C++ skeleton/bones in wire_graph, because the
+        *     bone nodes may not exist yet at this point.
+        *   - Camera generic vs perspective: the PARALLEL case is complete
+        *     here (unlike the C decoder's parse_camera bug noted in m3g.h).
+        *     If has_perspective is true but projection_type is neither
+        *     PERSPECTIVE nor PARALLEL, the params_ array is filled directly
+        *     as a fallback.
+        *
+        * Common tail: every branch ends by copying object_type_ / object_id_ /
+        * raw_length_ from the C struct. Do not move that into the switch - the
+        * default branch and every typed branch all need it. */
         Object3DPtr make_object(m3g_object const *o) {
             if (!o) return nullptr;
             Object3DPtr base;
@@ -2404,6 +2494,31 @@ namespace m3g {
             return by_id[static_cast<std::size_t>(id)];
         }
 
+        /* Second pass of the graph build: connect parsed objects into the live
+        * C++ object graph. Every link is looked up by object id in by_id,
+        * which must already be populated by make_object() in id order.
+        *
+        * Ordering matters inside the switch:
+        *   - Animation tracks are wired first (via the wire_tracks lambda)
+        *     because they are generic across Object3D and several subclasses
+        *     override their own attach logic later.
+        *   - Group/World children are wired next; World then wires the active
+        *     camera and background.
+        *   - Mesh cases wire vertex_buffer / submeshes / appearances, then
+        *     skinned or morph-specific fields.
+        *   - The remaining cases (Appearance, Texture2D, Image2D, ...) each
+        *     link their own child references; see their branches.
+        *
+        * Missing / null objects: a lookup can return nullptr if the id is 0
+        * (reference = "none") or out of range. Every consumer therefore
+        * checks `if (auto x = as<T>(...))` before using the result - do not
+        * assume references resolve, even after a successful decode.
+        *
+        * Why two passes: M3G files can contain forward references (an object
+        * referenced before it is defined) and reference cycles (parent/child
+        * mutual references). A single pass would fail on both. Two passes
+        * also makes the alloc/wire split easy to reason about - make_object
+        * never dereferences another object's fields. */
         void wire_graph(m3g_file const *f, std::vector<Object3DPtr> &by_id) {
             for (int id = 1; id <= f->object_count; ++id) {
                 m3g_object const *o = f->objects[id];
