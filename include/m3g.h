@@ -486,14 +486,15 @@ typedef struct m3g_group_data {
 /** @brief Camera node. */
 typedef struct m3g_camera_data {
     m3g_node_meta node;
-    int projection_type;
-    float fov_degrees;
-    float aspect_ratio;
-    float near_distance;
-    float far_distance;
-    float generic_values[16];
-    int has_perspective; /**< @brief Perspective parameters valid. */
-    int has_generic16;   /**< @brief @c generic_values holds a 4×4. */
+    int projection_type;      /**< @brief M3G projection_type: 48 / 49 / 50. */
+    float fov_degrees;        /**< @brief PERSPECTIVE or PARALLEL: FOV / ortho height. */
+    float aspect_ratio;       /**< @brief PERSPECTIVE or PARALLEL: aspect ratio. */
+    float near_distance;      /**< @brief PERSPECTIVE or PARALLEL: near clip. */
+    float far_distance;       /**< @brief PERSPECTIVE or PARALLEL: far clip. */
+    float generic_values[16]; /**< @brief GENERIC (pt == 48): full 4x4, row-major. */
+    int has_perspective;      /**< @brief PERSPECTIVE parameters valid (pt == 50). */
+    int has_parallel;         /**< @brief PARALLEL parameters valid (pt == 49). */
+    int has_generic16;        /**< @brief @c generic_values holds a 4x4 (pt == 48). */
 } m3g_camera_data;
 
 /** @brief Light node. */
@@ -1823,34 +1824,36 @@ static m3g_result m3g__parse_group_like(m3g_object *o, m3g__br *r, int is_world)
  *
  * projection_type constants (JSR-184):
  *   48 = GENERIC     -> followed by a full 4x4 projection matrix (16 floats)
- *   49 = PARALLEL    -> followed by 4 floats (near, far, height, aspect)
+ *   49 = PARALLEL    -> followed by 4 floats (fov_or_height, aspect, near, far)
  *   50 = PERSPECTIVE -> followed by 4 floats (fov_deg, aspect, near, far)
  *
- * NOTE: PARALLEL (49) falls into the `else` branch below and only copies
- * its 4 floats into generic_values[0..3] without setting either
- * has_perspective or has_generic16 - parallel cameras are therefore
- * unusable downstream. TODO: add a has_parallel flag or fold PARALLEL
- * into has_generic16 handling. */
+ * Each variant sets exactly one of has_generic16 / has_parallel /
+ * has_perspective; downstream (m3g.hpp make_object) dispatches on those
+ * flags. Unknown projection_type is a format error, not silently accepted. */
 static m3g_result m3g__parse_camera(m3g_object *o, m3g__br *r) {
-    uint8_t pt; m3g_result rc; float vals[16];
+    uint8_t pt; m3g_result rc; float vals[4];
     o->object_type = M3G_OBJ_CAMERA;
     rc = m3g__read_node(r, &o->u.camera.node); if (rc) return rc;
     rc = m3g__read_u8(r, &pt); if (rc) return rc; o->u.camera.projection_type = pt;
-    if (pt == 48) {                 /* GENERIC: full 4x4 matrix */
+    if (pt == 48) {                       /* GENERIC: full 4x4 matrix */
         o->u.camera.has_generic16 = 1;
         return m3g__read_floats(r, 16, o->u.camera.generic_values);
     }
+    /* PARALLEL (49) and PERSPECTIVE (50) share the same 4-float payload:
+     *   fov_or_height, aspect_ratio, near_distance, far_distance */
     rc = m3g__read_floats(r, 4, vals); if (rc) return rc;
-    if (pt == 50) {                 /* PERSPECTIVE: fov/aspect/near/far */
+    if (pt == 50) {
         o->u.camera.has_perspective = 1;
-        o->u.camera.fov_degrees = vals[0];
-        o->u.camera.aspect_ratio = vals[1];
-        o->u.camera.near_distance = vals[2];
-        o->u.camera.far_distance = vals[3];
+    } else if (pt == 49) {
+        o->u.camera.has_parallel = 1;
     } else {
-        o->u.camera.has_generic16 = 0;
-        memcpy(o->u.camera.generic_values, vals, 4 * sizeof(float));
+        m3g__set_err("camera: unknown projection_type %d", pt);
+        return M3G_ERR_FORMAT;
     }
+    o->u.camera.fov_degrees   = vals[0];
+    o->u.camera.aspect_ratio  = vals[1];
+    o->u.camera.near_distance = vals[2];
+    o->u.camera.far_distance  = vals[3];
     return M3G_OK;
 }
 static m3g_result m3g__parse_light(m3g_object *o, m3g__br *r) {
@@ -1969,24 +1972,54 @@ static m3g_result m3g__parse_vertex_buffer(m3g_object *o, m3g__br *r) {
 }
 /* Expand an implicit TriangleStripArray into an explicit index array.
  *
- * Implicit encoding stores no indices; the semantics are "vertex k of
- * the whole array is start + k". The strips are contiguous in index
- * space, not restarted: strip 0 uses start .. start+lens[0]-1, strip 1
- * uses start+lens[0] .. start+lens[0]+lens[1]-1, and so on. `lens[i]`
- * is the vertex count of strip i, not a cumulative offset.
+ * Implicit semantics (JSR-184 §11.16): vertex indices run CONTINUOUSLY
+ * across strips. With start = S and strip lengths L0, L1, ...:
+ *   strip 0 -> S            .. S + L0 - 1
+ *   strip 1 -> S + L0       .. S + L0 + L1 - 1
+ *   strip i -> S + sum_{j<i} Lj .. + Li - 1
  *
- * Purpose: downstream consumers (glTF exporter, scene builder) only
- * ever need to handle one representation. Normalizing here keeps every
- * later stage from re-implementing the implicit/explicit distinction.
+ * Do NOT reset the counter to `start` for each strip - that would make
+ * every strip reference the same vertices, silently duplicating geometry.
  *
- * On success, *out_idx is heap-allocated (length *out_n = sum(lens))
- * and owned by the caller (m3g__free_object3d path via the parsed
- * object). On failure, *out_idx is untouched and may be NULL. */
+ * Overflow: lens[] entries can each be up to INT_MAX; summing them in
+ * `int` wraps negative and would then drive a heap overflow. Accumulate
+ * in long long and reject anything that will not fit in int before
+ * allocating.
+ *
+ * On failure *out_idx is left NULL and *out_n is set to 0, so the
+ * caller can safely free/ignore. On success *out_idx is heap-allocated
+ * with *out_n = sum(lens) entries; ownership transfers to the caller
+ * (freed via m3g__free_object3d -> M3G_FREE). */
 static m3g_result m3g__build_implicit_strips(int start, int const *lens, int nlen, int **out_idx, int *out_n) {
-    int total = 0, i, k = 0, next;
-    for (i = 0; i < nlen; ++i) total += lens[i];
+    long long total_ll = 0;
+    int total, i, k = 0, next;
+
+    if (out_n) *out_n = 0;
+    if (out_idx) *out_idx = NULL;
+    if (out_idx == NULL || out_n == NULL) {
+        m3g__set_err("build_implicit_strips: null out pointer");
+        return M3G_ERR;
+    }
+
+    for (i = 0; i < nlen; ++i) {
+        if (lens[i] < 0) {
+            m3g__set_err("build_implicit_strips: negative strip length");
+            return M3G_ERR_FORMAT;
+        }
+        total_ll += (long long)lens[i];
+        if (total_ll > (long long)INT_MAX) {
+            m3g__set_err("build_implicit_strips: total overflow (%lld)", total_ll);
+            return M3G_ERR_RANGE;
+        }
+    }
+    total = (int)total_ll;
+
     *out_idx = (int *)m3g__xmalloc((size_t)(total > 0 ? total : 1) * sizeof(int));
-    if (!*out_idx) return M3G_ERR_NOMEM;
+    if (!*out_idx) {
+        m3g__set_err("out of memory");
+        return M3G_ERR_NOMEM;
+    }
+
     next = start;
     for (i = 0; i < total; ++i) (*out_idx)[k++] = next++;
     *out_n = total;
@@ -2013,7 +2046,6 @@ static m3g_result m3g__build_implicit_strips(int start, int const *lens, int nle
  * strip_lengths[i] is the vertex count of the i-th strip; the geometry
  * is a sequence of independent triangle strips, NOT one continuous
  * strip. Reassemble accordingly when exporting to glTF. */
-
 static m3g_result m3g__parse_triangle_strip(m3g_object *o, m3g__br *r) {
     uint8_t enc; uint32_t n; int i, start; m3g_result rc;
     o->object_type = M3G_OBJ_TRIANGLE_STRIP_ARRAY;
