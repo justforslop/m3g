@@ -1008,6 +1008,31 @@ M3G_API void m3g_decompose_trs(float const m[16], float t[3], float q_xyzw[4], f
 #ifdef M3G_IMPLEMENTATION
 #ifndef M3G_IMPLEMENTATION_INCLUDED
 #define M3G_IMPLEMENTATION_INCLUDED
+/* ==========================================================================
+ * IMPLEMENTATION NOTES
+ *
+ * Endianness: all multi-byte integers are read little-endian, matching
+ *   JSR-184. m3g__read_u16/u32 already handle byte order — do not swap
+ *   bytes at call sites.
+ *
+ * Ownership: every m3g__read_* helper that returns a pointer
+ *   (read_bytes, read_cstring) allocates with M3G_MALLOC. Releases are
+ *   centralized in m3g__object_free_contents() and m3g_file_free().
+ *   Callers must not free these pointers individually.
+ *
+ * Object indexing: m3g_file.objects[] is indexed by object_id, which
+ *   starts at 1. objects[0] is permanently NULL (object reference 0
+ *   means "none" in the binary format).
+ *
+ * Errors: helpers return m3g_result (0 = success, negative = M3G_ERR_*).
+ *   On failure they have already called m3g__set_err() with a readable
+ *   message. Callers should just propagate `rc`; do not call set_err
+ *   again.
+ *
+ * Math convention: matrices are row-major 4x4, column-vector semantics.
+ *   Translation lives in m[3], m[7], m[11]. See m3g_math_io and
+ *   m3g__component_to_rm().
+ * ========================================================================== */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1130,6 +1155,20 @@ static void m3g__port_mat4_rotation_axis(float angle_rad, float ax, float ay, fl
     out[8]  = t*x*z - s*y; out[9]  = t*y*z + s*x; out[10] = t*z*z + c;   out[11] = 0.f;
     out[12] = 0.f;         out[13] = 0.f;         out[14] = 0.f;         out[15] = 1.f;
 }
+/* Extract a unit quaternion (xyzw) from a 3x3 rotation matrix given by
+ * individual entries. This is Shepperd's method, the numerically stable
+ * standard for this conversion.
+ *
+ * The four branches pick whichever of trace, r00, r11, r22 is largest,
+ * because s = sqrt(...) would approach zero for any other choice when
+ * the true rotation is near 180 degrees about that axis. Dividing by a
+ * tiny s would destroy precision; choosing the largest argument keeps
+ * s well away from zero in every case.
+ *
+ * Degenerate input (non-rotation matrix, all-zero block): the final
+ * normalize collapses to the identity quaternion (0,0,0,1) if the
+ * magnitude is below 1e-8. Callers can rely on getting a unit-length
+ * quaternion on return, never a NaN. */
 static void m3g__port_quat_from_rm_rot(float const r00, float r01, float r02,
                                        float r10, float r11, float r12,
                                        float r20, float r21, float r22,
@@ -1351,6 +1390,24 @@ M3G_API void m3g_decompose_trs(float const matrix[16], float t[3], float q_xyzw[
     io->decompose_trs(matrix, t, q_xyzw, s, io->user);
 }
 
+/* Compose a ComponentTransform into one row-major 4x4 matrix.
+ *
+ * Order is strictly M = T * R * S (not S * R * T and not S * T * R):
+ *   - M3G uses the column-vector convention (v' = M * v). "Apply scale,
+ *     then rotate, then translate" therefore expands to T * R * S, with
+ *     the translation applied last from the reader's left-to-right view.
+ *   - This also explains why m3g_node_matrix() can memcpy the general
+ *     transform directly while this function must multiply: the binary
+ *     format stores TRS components separately, not a baked matrix.
+ *   - Rotation pivot: R rotates around the origin, so scaling happens
+ *     about the local origin BEFORE translation. If a future spec variant
+ *     ever needs pivot-relative rotation, this is the function to change.
+ *
+ * Row-major layout: translation ends up in out[3], out[7], out[11]
+ * (matches m3g_math_io and the header comment on m3g_mat4_translation).
+ *
+ * orientation_angle is in radians (see m3g_component_transform in m3g.h);
+ * the axis need not be unit length - m3g_mat4_rotation_axis normalizes. */
 static void m3g__component_to_rm(m3g_component_transform const *c, float out[16]) {
     float T[16], R[16], S[16], RS[16];
     m3g_mat4_translation(c->translation[0], c->translation[1], c->translation[2], T);
@@ -1496,9 +1553,26 @@ static m3g_result m3g__read_objref(m3g__br *r, int *o) {
     uint32_t v; m3g_result rc = m3g__read_u32(r, &v); if (rc) return rc;
     return m3g__checked_int(v, o, "object ref");
 }
-
+/* Spec §11.19 Object3D - common prefix shared by every Object3D subclass.
+ *
+ * Byte layout (little-endian):
+ *   u32 user_id
+ *   u32 animation_track_count
+ *   u32 animation_track_ids[animation_track_count]     // object refs
+ *   u32 user_parameter_count
+ *   repeat user_parameter_count times:
+ *     u32 parameter_id
+ *     u32 value_len
+ *     u8  value[value_len]
+ *
+ * Zeroes *m up front, so the caller may pass uninitialized storage.
+ *
+ * Ownership: on success, m->animation_track_ids and m->user_parameters
+ * (including every .value) are heap-allocated and freed by
+ * m3g__free_object3d(). On partial failure, some of these may already
+ * be allocated - the caller should discard the whole object via
+ * m3g_file_free() rather than trying to free individual fields. */
 static m3g_result m3g__read_object3d(m3g__br *r, m3g_object3d_meta *m) {
-    /* Spec §11.19 Object3D (j2me_mobile_3d-1_1-mrel-spec.pdf) */
     uint32_t uid, atc, upc; m3g_result rc; int i;
     memset(m, 0, sizeof(*m));
     rc = m3g__read_u32(r, &uid); if (rc) return rc;
@@ -1674,7 +1748,23 @@ M3G_API void m3g_file_free(m3g_file *f) {
     M3G_FREE(f->sections);
     memset(f, 0, sizeof(*f));
 }
-
+/* Register a parsed object at slot `object_id` in f->objects[].
+ *
+ * objects[] is indexed directly by object_id, which is 1-based and may
+ * be non-contiguous in a malformed or externally-referenced file. Slot
+ * 0 is permanently NULL; object reference 0 in the binary format means
+ * "no object", so anything that dereferences by id can safely treat 0
+ * as absent.
+ *
+ * Capacity growth doubles until it exceeds `id`, never reallocating on
+ * every insert. Newly grown slots MUST be zeroed: m3g__obj() reads
+ * f->objects[id] directly with no bounds-existence check beyond
+ * id <= object_count, and a stale pointer in an untouched slot would
+ * be read as a live object. The memset covers exactly the extended
+ * range so previously-populated slots are never clobbered.
+ *
+ * object_count tracks the highest assigned id (not the element count);
+ * callers iterating the array should go 1..object_count inclusive. */
 static m3g_result m3g__file_add_object(m3g_file *f, m3g_object *o) {
     int id = o->object_id;
     if (id + 1 > f->object_capacity) {
@@ -1729,17 +1819,29 @@ static m3g_result m3g__parse_group_like(m3g_object *o, m3g__br *r, int is_world)
     }
     return M3G_OK;
 }
+/* Spec §11.3 Camera.
+ *
+ * projection_type constants (JSR-184):
+ *   48 = GENERIC     -> followed by a full 4x4 projection matrix (16 floats)
+ *   49 = PARALLEL    -> followed by 4 floats (near, far, height, aspect)
+ *   50 = PERSPECTIVE -> followed by 4 floats (fov_deg, aspect, near, far)
+ *
+ * NOTE: PARALLEL (49) falls into the `else` branch below and only copies
+ * its 4 floats into generic_values[0..3] without setting either
+ * has_perspective or has_generic16 - parallel cameras are therefore
+ * unusable downstream. TODO: add a has_parallel flag or fold PARALLEL
+ * into has_generic16 handling. */
 static m3g_result m3g__parse_camera(m3g_object *o, m3g__br *r) {
     uint8_t pt; m3g_result rc; float vals[16];
     o->object_type = M3G_OBJ_CAMERA;
     rc = m3g__read_node(r, &o->u.camera.node); if (rc) return rc;
     rc = m3g__read_u8(r, &pt); if (rc) return rc; o->u.camera.projection_type = pt;
-    if (pt == 48) {
+    if (pt == 48) {                 /* GENERIC: full 4x4 matrix */
         o->u.camera.has_generic16 = 1;
         return m3g__read_floats(r, 16, o->u.camera.generic_values);
     }
     rc = m3g__read_floats(r, 4, vals); if (rc) return rc;
-    if (pt == 50) {
+    if (pt == 50) {                 /* PERSPECTIVE: fov/aspect/near/far */
         o->u.camera.has_perspective = 1;
         o->u.camera.fov_degrees = vals[0];
         o->u.camera.aspect_ratio = vals[1];
@@ -1865,6 +1967,21 @@ static m3g_result m3g__parse_vertex_buffer(m3g_object *o, m3g__br *r) {
     }
     return M3G_OK;
 }
+/* Expand an implicit TriangleStripArray into an explicit index array.
+ *
+ * Implicit encoding stores no indices; the semantics are "vertex k of
+ * the whole array is start + k". The strips are contiguous in index
+ * space, not restarted: strip 0 uses start .. start+lens[0]-1, strip 1
+ * uses start+lens[0] .. start+lens[0]+lens[1]-1, and so on. `lens[i]`
+ * is the vertex count of strip i, not a cumulative offset.
+ *
+ * Purpose: downstream consumers (glTF exporter, scene builder) only
+ * ever need to handle one representation. Normalizing here keeps every
+ * later stage from re-implementing the implicit/explicit distinction.
+ *
+ * On success, *out_idx is heap-allocated (length *out_n = sum(lens))
+ * and owned by the caller (m3g__free_object3d path via the parsed
+ * object). On failure, *out_idx is untouched and may be NULL. */
 static m3g_result m3g__build_implicit_strips(int start, int const *lens, int nlen, int **out_idx, int *out_n) {
     int total = 0, i, k = 0, next;
     for (i = 0; i < nlen; ++i) total += lens[i];
@@ -1875,12 +1992,34 @@ static m3g_result m3g__build_implicit_strips(int start, int const *lens, int nle
     *out_n = total;
     return M3G_OK;
 }
+
+/* Spec §11.16 TriangleStripArray.
+ *
+ * Two major modes, distinguished by the encoding byte:
+ *
+ *   implicit (0/1/2) - no index array is stored. Vertices are consumed
+ *                      sequentially as start, start+1, start+2, ...
+ *                      The encoding byte only selects the width of
+ *                      `start`: 0 = u32, 1 = u8, 2 = u16.
+ *                      m3g__build_implicit_strips() expands this into
+ *                      an explicit index array so downstream consumers
+ *                      only ever see one representation.
+ *
+ *   explicit (128/129/130) - a real index array is stored. The encoding
+ *                      byte only selects the index width:
+ *                        128 = u32, 129 = u8, 130 = u16.
+ *
+ * Both modes end with (u32 strip_count, u32 strip_lengths[strip_count]).
+ * strip_lengths[i] is the vertex count of the i-th strip; the geometry
+ * is a sequence of independent triangle strips, NOT one continuous
+ * strip. Reassemble accordingly when exporting to glTF. */
+
 static m3g_result m3g__parse_triangle_strip(m3g_object *o, m3g__br *r) {
     uint8_t enc; uint32_t n; int i, start; m3g_result rc;
     o->object_type = M3G_OBJ_TRIANGLE_STRIP_ARRAY;
     rc = m3g__read_object3d(r, &o->u.triangle_strip.object3d); if (rc) return rc;
     rc = m3g__read_u8(r, &enc); if (rc) return rc; o->u.triangle_strip.encoding = enc;
-    if (enc == 0 || enc == 1 || enc == 2) {
+    if (enc == 0 || enc == 1 || enc == 2) {                 /* implicit */
         if (enc == 0) { uint32_t s; rc = m3g__read_u32(r, &s); if (rc) return rc; rc = m3g__checked_int(s, &start, "start"); if (rc) return rc; }
         else if (enc == 1) { uint8_t s; rc = m3g__read_u8(r, &s); if (rc) return rc; start = s; }
         else { uint16_t s; rc = m3g__read_u16(r, &s); if (rc) return rc; start = s; }
@@ -1895,7 +2034,7 @@ static m3g_result m3g__parse_triangle_strip(m3g_object *o, m3g__br *r) {
         return m3g__build_implicit_strips(start, o->u.triangle_strip.strip_lengths, o->u.triangle_strip.strip_count,
                                          &o->u.triangle_strip.indices, &o->u.triangle_strip.index_count);
     }
-    if (enc == 128 || enc == 129 || enc == 130) {
+    if (enc == 128 || enc == 129 || enc == 130) {                   /* explicit */
         rc = m3g__read_u32(r, &n); if (rc) return rc;
         rc = m3g__checked_int(n, &o->u.triangle_strip.index_count, "index count"); if (rc) return rc;
         o->u.triangle_strip.indices = (int *)m3g__xmalloc((size_t)(o->u.triangle_strip.index_count > 0 ? o->u.triangle_strip.index_count : 1) * sizeof(int));
