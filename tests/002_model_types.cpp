@@ -99,7 +99,7 @@ int main(void)
         TESTFW_EXPECTED(std::fabs(m[0] - 1.f) < 1e-5f);
         t.postTranslate(1.f, 2.f, 3.f);
         t.get(m);
-        TESTFW_EXPECTED(std::fabs(m[12] - 1.f) < 1e-5f);
+        TESTFW_EXPECTED( std::fabs(m[3] - 1.f) < 1e-5f );
         auto &g3d = m3g::Graphics3D::getInstance();
         g3d.setViewport(0, 0, 640, 480);
         TESTFW_EXPECTED(g3d.getViewportWidth() == 640);

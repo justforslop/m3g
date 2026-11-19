@@ -354,16 +354,19 @@ namespace m3g {
         }
 
         void transpose() {
-            float t[16];
-            for (int r = 0; r < 4; ++r)
-                for (int c = 0; c < 4; ++c) t[c * 4 + r] = m_[static_cast<std::size_t>(r * 4 + c)];
-                set(t);
+        float t[16];
+        for (int r = 0; r < 4; ++r) {
+            for (int c = 0; c < 4; ++c) {
+                t[c * 4 + r] = m_[static_cast<std::size_t>(r * 4 + c)];
+            }
+        }
+        set(t);
         }
         void invert(); /* defined under M3G_DECODE_IMPL */
 
         void postMultiply(const Transform &transform) {
             float out[16];
-            for (int r = 0; r < 4; ++r)
+            for (int r = 0; r < 4; ++r){
                 for (int c = 0; c < 4; ++c) {
                     out[r * 4 + c] =
                     m_[static_cast<std::size_t>(r * 4 + 0)] * transform.m_[static_cast<std::size_t>(0 * 4 + c)] +
@@ -371,13 +374,14 @@ namespace m3g {
                     m_[static_cast<std::size_t>(r * 4 + 2)] * transform.m_[static_cast<std::size_t>(2 * 4 + c)] +
                     m_[static_cast<std::size_t>(r * 4 + 3)] * transform.m_[static_cast<std::size_t>(3 * 4 + c)];
                 }
-                set(out);
+            }
+            set(out);
         }
         void postTranslate(float tx, float ty, float tz) {
             Transform t;
-            t.m_[12] = tx;
-            t.m_[13] = ty;
-            t.m_[14] = tz;
+            t.m_[3] = tx;
+            t.m_[7] = ty;
+            t.m_[11] = tz;
             postMultiply(t);
         }
         void postScale(float sx, float sy, float sz) {
@@ -2236,20 +2240,17 @@ namespace m3g {
                     auto c = std::make_shared<Camera>();
                     apply_node(*c, o->u.camera.node);
                     c->projection_type_ = o->u.camera.projection_type;
-                    if (o->u.camera.has_perspective) {
-                        if (o->u.camera.projection_type == Camera::PERSPECTIVE)
-                            c->setPerspective(o->u.camera.fov_degrees, o->u.camera.aspect_ratio, o->u.camera.near_distance,
-                                              o->u.camera.far_distance);
-                            else if (o->u.camera.projection_type == Camera::PARALLEL)
-                                c->setParallel(o->u.camera.fov_degrees, o->u.camera.aspect_ratio, o->u.camera.near_distance,
-                                               o->u.camera.far_distance);
-                                else {
-                                    c->params_[0] = o->u.camera.fov_degrees;
-                                    c->params_[1] = o->u.camera.aspect_ratio;
-                                    c->params_[2] = o->u.camera.near_distance;
-                                    c->params_[3] = o->u.camera.far_distance;
-                                }
+
+                    if (o->u.camera.has_perspective &&
+                        o->u.camera.projection_type == Camera::PERSPECTIVE) {
+                        c->setPerspective(o->u.camera.fov_degrees, o->u.camera.aspect_ratio,
+                                        o->u.camera.near_distance, o->u.camera.far_distance);
+                    } else if (o->u.camera.has_parallel &&
+                            o->u.camera.projection_type == Camera::PARALLEL) {
+                        c->setParallel(o->u.camera.fov_degrees, o->u.camera.aspect_ratio,
+                                    o->u.camera.near_distance, o->u.camera.far_distance);
                     }
+
                     if (o->u.camera.has_generic16) {
                         Transform t;
                         t.set(o->u.camera.generic_values);
