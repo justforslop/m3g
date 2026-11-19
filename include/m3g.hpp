@@ -651,7 +651,7 @@ private:
  *        and the projection from 3D to 2D.
  *
  * Three projection types are supported:
- * - PERSPECTIVE: defined by field-of-view, aspect ratio, near/far clip planes
+ * - PERSPECTIVE: defined by field-of-view, aspect ratio, _near/_far clip planes
  * - PARALLEL: orthographic projection with the same parameters
  * - GENERIC: an arbitrary 4x4 projection matrix
  *
@@ -665,23 +665,23 @@ public:
 
     Camera() { object_type_ = M3G_OBJ_CAMERA; }
 
-    void setPerspective(float fovy, float aspectRatio, float near, float far) {
-        if (fovy <= 0.f || fovy >= 180.f || aspectRatio <= 0.f || near <= 0.f || far <= 0.f || near >= far)
+    void setPerspective(float fovy, float aspectRatio, float _near, float _far) {
+        if (fovy <= 0.f || fovy >= 180.f || aspectRatio <= 0.f || _near <= 0.f || _far <= 0.f || _near >= _far)
             throw std::invalid_argument("Camera.setPerspective");
         projection_type_ = PERSPECTIVE;
         params_[0] = fovy;
         params_[1] = aspectRatio;
-        params_[2] = near;
-        params_[3] = far;
+        params_[2] = _near;
+        params_[3] = _far;
     }
-    void setParallel(float fovy, float aspectRatio, float near, float far) {
-        if (fovy <= 0.f || aspectRatio <= 0.f || near <= 0.f || far <= 0.f || near >= far)
+    void setParallel(float fovy, float aspectRatio, float _near, float _far) {
+        if (fovy <= 0.f || aspectRatio <= 0.f || _near <= 0.f || _far <= 0.f || _near >= _far)
             throw std::invalid_argument("Camera.setParallel");
         projection_type_ = PARALLEL;
         params_[0] = fovy;
         params_[1] = aspectRatio;
-        params_[2] = near;
-        params_[3] = far;
+        params_[2] = _near;
+        params_[3] = _far;
     }
     void setGeneric(const Transform *transform) {
         if (!transform) throw std::invalid_argument("Camera.setGeneric: null");
@@ -718,7 +718,7 @@ public:
  *
  * Supported modes: AMBIENT, DIRECTIONAL, OMNI (point), and SPOT.
  * Directional lights are infinite in range; omni and spot lights have
- * attenuation (constant, linear, quadratic). Spot lights additionally have
+ * attenuation (constant, li_near, quadratic). Spot lights additionally have
  * a cone angle and exponent.
  *
  * Java: javax.microedition.m3g.Light
@@ -745,14 +745,14 @@ public:
     float getIntensity() const { return intensity_; }
     void setColor(int RGB) { color_ = RGB & 0x00ffffff; }
     int getColor() const { return color_; }
-    void setAttenuation(float constant, float linear, float quadratic) {
-        if (constant < 0.f || linear < 0.f || quadratic < 0.f) throw std::invalid_argument("Light.setAttenuation");
+    void setAttenuation(float constant, float li_near, float quadratic) {
+        if (constant < 0.f || li_near < 0.f || quadratic < 0.f) throw std::invalid_argument("Light.setAttenuation");
         att_c_ = constant;
-        att_l_ = linear;
+        att_l_ = li_near;
         att_q_ = quadratic;
     }
     float getConstantAttenuation() const { return att_c_; }
-    float getLinearAttenuation() const { return att_l_; }
+    float getLi_nearAttenuation() const { return att_l_; }
     float getQuadraticAttenuation() const { return att_q_; }
     void setSpotAngle(float angle) {
         if (angle < 0.f || angle > 90.f) throw std::invalid_argument("Light.setSpotAngle");
@@ -828,7 +828,7 @@ public:
 /**
  * @brief An Appearance component encapsulating attributes for fogging.
  *
- * Fog can be LINEAR (fades between near and far distances) or EXPONENTIAL
+ * Fog can be LINEAR (fades between _near and _far distances) or EXPONENTIAL
  * (density-based). The fog color is applied as a blend between the fragment
  * color and the fog color based on distance.
  *
@@ -841,13 +841,13 @@ public:
     Fog() { object_type_ = M3G_OBJ_FOG; }
     void setMode(int mode) { mode_ = mode; }
     int getMode() const { return mode_; }
-    void setLinear(float near, float far) {
-        near_ = near;
-        far_ = far;
+    void setLi_near(float _near, float _far) {
+        _near_ = _near;
+        _far_ = _far;
         mode_ = LINEAR;
     }
-    float getNearDistance() const { return near_; }
-    float getFarDistance() const { return far_; }
+    float getNearDistance() const { return _near_; }
+    float getFarDistance() const { return _far_; }
     void setDensity(float density) {
         density_ = density;
         mode_ = EXPONENTIAL;
@@ -857,7 +857,7 @@ public:
     int getColor() const { return color_; }
     const char *getClassName() const override { return "Fog"; }
     int mode_ = 0, color_ = 0;
-    float density_ = 0, near_ = 0, far_ = 0;
+    float density_ = 0, _near_ = 0, _far_ = 0;
 };
 
 /**
@@ -1511,9 +1511,9 @@ public:
     int getViewportY() const { return vy_; }
     int getViewportWidth() const { return vw_; }
     int getViewportHeight() const { return vh_; }
-    void setDepthRange(float near, float far) {
-        dn_ = near;
-        df_ = far;
+    void setDepthRange(float _near, float _far) {
+        dn_ = _near;
+        df_ = _far;
     }
     float getDepthRangeNear() const { return dn_; }
     float getDepthRangeFar() const { return df_; }
@@ -1599,8 +1599,8 @@ struct SceneMeshIr {
 struct ScenePerspectiveCameraIr {
     float yfov_radians = 0.f;
     std::optional<float> aspect_ratio;
-    float znear = 0.1f;
-    std::optional<float> zfar;
+    float z_near = 0.1f;
+    std::optional<float> z_far;
 };
 struct SceneCameraIr {
     std::string name;
@@ -2141,16 +2141,16 @@ Object3DPtr make_object(m3g_object const *o) {
         c->projection_type_ = o->u.camera.projection_type;
         if (o->u.camera.has_perspective) {
             if (o->u.camera.projection_type == Camera::PERSPECTIVE)
-                c->setPerspective(o->u.camera.fov_degrees, o->u.camera.aspect_ratio, o->u.camera.near_distance,
-                                  o->u.camera.far_distance);
+                c->setPerspective(o->u.camera.fov_degrees, o->u.camera.aspect_ratio, o->u.camera._near_distance,
+                                  o->u.camera._far_distance);
             else if (o->u.camera.projection_type == Camera::PARALLEL)
-                c->setParallel(o->u.camera.fov_degrees, o->u.camera.aspect_ratio, o->u.camera.near_distance,
-                               o->u.camera.far_distance);
+                c->setParallel(o->u.camera.fov_degrees, o->u.camera.aspect_ratio, o->u.camera._near_distance,
+                               o->u.camera._far_distance);
             else {
                 c->params_[0] = o->u.camera.fov_degrees;
                 c->params_[1] = o->u.camera.aspect_ratio;
-                c->params_[2] = o->u.camera.near_distance;
-                c->params_[3] = o->u.camera.far_distance;
+                c->params_[2] = o->u.camera._near_distance;
+                c->params_[3] = o->u.camera._far_distance;
             }
         }
         if (o->u.camera.has_generic16) {
@@ -2167,7 +2167,7 @@ Object3DPtr make_object(m3g_object const *o) {
         l->setMode(o->u.light.mode);
         l->setIntensity(o->u.light.intensity);
         l->setColor((o->u.light.color.red << 16) | (o->u.light.color.green << 8) | o->u.light.color.blue);
-        l->setAttenuation(o->u.light.attenuation_constant, o->u.light.attenuation_linear,
+        l->setAttenuation(o->u.light.attenuation_constant, o->u.light.attenuation_li_near,
                           o->u.light.attenuation_quadratic);
         l->setSpotAngle(o->u.light.spot_angle);
         l->setSpotExponent(o->u.light.spot_exponent);
@@ -2216,8 +2216,8 @@ Object3DPtr make_object(m3g_object const *o) {
         f->setMode(o->u.fog.mode);
         f->setColor((o->u.fog.color.red << 16) | (o->u.fog.color.green << 8) | o->u.fog.color.blue);
         f->density_ = o->u.fog.density;
-        f->near_ = o->u.fog.near_distance;
-        f->far_ = o->u.fog.far_distance;
+        f->_near_ = o->u.fog._near_distance;
+        f->_far_ = o->u.fog._far_distance;
         base = f;
         break;
     }
@@ -2762,8 +2762,8 @@ SceneIr scene_ir_from_c(m3g_scene_ir const *s) {
             ScenePerspectiveCameraIr p;
             p.yfov_radians = c.yfov_radians;
             if (c.aspect_ratio > 0.f) p.aspect_ratio = c.aspect_ratio;
-            p.znear = c.znear;
-            if (c.zfar > 0.f) p.zfar = c.zfar;
+            p.z_near = c.z_near;
+            if (c.z_far > 0.f) p.z_far = c.z_far;
             dc.perspective = p;
         }
     }
