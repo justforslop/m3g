@@ -94,7 +94,7 @@ pub fn build(b: *std.Build) void {
     const view_inc = [_][]const u8{ ".", "include", "src", "vendors", "vendors/cgltf", "vendors/libs", "vendors/miniz", "vendors/imgui" };
 
     // Package / CLI: size-optimized when -Doptimize is left at default Debug.
-    const lib_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseSmall else optimize;
+    const lib_optimize: std.builtin.OptimizeMode = if (optimize == .debug) .small else optimize;
     const lib_cpp_flags = makeCppFlags(b, false, is_linux);
     const lib_c_flags = makeCFlags(b, false, is_linux);
     const view_cpp_flags = makeCppFlags(b, true, is_linux);
@@ -238,7 +238,7 @@ fn addViewer(b: *std.Build, opts: ViewerOpts) *std.Build.Step.Compile {
     const mod = b.createModule(.{
         .root_source_file = null,
         .target = opts.target,
-        .optimize = .Debug,
+        .optimize = .debug,
         .link_libc = true,
         .link_libcpp = true,
     });
@@ -277,7 +277,7 @@ fn resolvePython(b: *std.Build, override: ?[]const u8) []const []const u8 {
     else
         &.{ "python3", "python" };
 
-    if (b.findProgram(names, &.{})) |path| {
+    if (b.findProgram(.{ .names = names })) |path| {
         const base = std.fs.path.basename(path);
         const is_py_launcher = std.mem.eql(u8, base, "py.exe") or
             std.mem.eql(u8, base, "py") or
@@ -286,7 +286,7 @@ fn resolvePython(b: *std.Build, override: ?[]const u8) []const []const u8 {
             return b.dupeStrings(&.{ path, "-3" });
         }
         return b.dupeStrings(&.{path});
-    } else |_| {}
+    }
 
     if (host_win) return b.dupeStrings(&.{"python"});
     return b.dupeStrings(&.{"python3"});
@@ -398,7 +398,7 @@ fn addSetupSteps(b: *std.Build, py: []const []const u8) void {
         }
     };
 
-    const setup_libs = b.step("setup-libs", "Fetch testfw.h (+ vecmath.h if missing)");
+    const setup_libs = b.step("setup-libs", "Fetch testfw.h + vecmath.h");
     setup_libs.dependOn(Curl.stamp(b, py, "libs-testfw.h", "https://raw.githubusercontent.com/mattiasgustavsson/libs/refs/heads/main/testfw.h", "vendors/libs/testfw.h"));
     setup_libs.dependOn(Curl.stamp(b, py, "vecmath.h", "https://raw.githubusercontent.com/mattiasgustavsson/libs/refs/heads/main/vecmath.h", "vendors/libs/vecmath.h"));
 
