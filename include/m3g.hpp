@@ -752,7 +752,7 @@ public:
         att_q_ = quadratic;
     }
     float getConstantAttenuation() const { return att_c_; }
-    float getLi_nearAttenuation() const { return att_l_; }
+    float getLinearAttenuation() const { return att_l_; }
     float getQuadraticAttenuation() const { return att_q_; }
     void setSpotAngle(float angle) {
         if (angle < 0.f || angle > 90.f) throw std::invalid_argument("Light.setSpotAngle");
@@ -842,12 +842,12 @@ public:
     void setMode(int mode) { mode_ = mode; }
     int getMode() const { return mode_; }
     void setLi_near(float _near, float _far) {
-        _near_ = _near;
-        _far_ = _far;
+        near_ = _near;
+        far_ = _far;
         mode_ = LINEAR;
     }
-    float getNearDistance() const { return _near_; }
-    float getFarDistance() const { return _far_; }
+    float getNearDistance() const { return near_; }
+    float getFarDistance() const { return far_; }
     void setDensity(float density) {
         density_ = density;
         mode_ = EXPONENTIAL;
@@ -857,7 +857,7 @@ public:
     int getColor() const { return color_; }
     const char *getClassName() const override { return "Fog"; }
     int mode_ = 0, color_ = 0;
-    float density_ = 0, _near_ = 0, _far_ = 0;
+    float density_ = 0, near_ = 0, far_ = 0;
 };
 
 /**
