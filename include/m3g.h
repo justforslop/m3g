@@ -1273,10 +1273,17 @@ M3G_API m3g_math_io const *m3g_get_math_io(void) {
     return m3g__require_math_io();
 }
 
+static uint32_t m3g__adler32_builtin(uint32_t a, unsigned char const *p, size_t n) {
+    uint32_t s1 = a & 0xFFFFu, s2 = (a >> 16) & 0xFFFFu;
+    size_t i;
+    for (i = 0; i < n; ++i) { s1 = (s1 + p[i]) % 65521u; s2 = (s2 + s1) % 65521u; }
+    return (s2 << 16) | s1;
+}
 M3G_API uint32_t m3g_deflate_adler32(uint32_t adler, unsigned char const *ptr, size_t buf_len) {
     m3g_deflate_io const *io = m3g_get_deflate_io();
-    if (!io || !io->adler32) { m3g__set_err("deflate adler32 not set"); return 0; }
-    return io->adler32(adler, ptr, buf_len, io->user);
+    if (io && io->adler32) return io->adler32(adler, ptr, buf_len, io->user);
+    if (!ptr) return (uint32_t)M3G_ADLER32_INIT;
+    return m3g__adler32_builtin(adler, ptr, buf_len);
 }
 M3G_API int m3g_deflate_uncompress(unsigned char *dest, size_t *dest_len, unsigned char const *source, size_t source_len) {
     m3g_deflate_io const *io = m3g_get_deflate_io();
@@ -1412,21 +1419,25 @@ M3G_API void m3g_decompose_trs(float const matrix[16], float t[3], float q_xyzw[
 static void m3g__component_to_rm(m3g_component_transform const *c, float out[16]) {
     float T[16], R[16], S[16], RS[16];
     m3g_mat4_translation(c->translation[0], c->translation[1], c->translation[2], T);
-    m3g_mat4_rotation_axis(c->orientation_angle, c->orientation_axis[0], c->orientation_axis[1], c->orientation_axis[2], R);
+    m3g_mat4_rotation_axis(c->orientation_angle * (float)(M3G_PI / 180.0), c->orientation_axis[0], c->orientation_axis[1], c->orientation_axis[2], R);
     m3g_mat4_scale(c->scale[0], c->scale[1], c->scale[2], S);
     m3g_mat4_mul(R, S, RS);
     m3g_mat4_mul(T, RS, out);
 }
 M3G_API void m3g_node_matrix(m3g_node_meta const *node, float out[16]) {
-    if (node->transformable.has_general_transform) {
+    int hc = node->transformable.component.present;
+    int hg = node->transformable.has_general_transform;
+    float C[16];
+    if (hc && hg) {
+        m3g__component_to_rm(&node->transformable.component, C);
+        m3g_mat4_mul(C, node->transformable.general_transform, out);
+    } else if (hg) {
         memcpy(out, node->transformable.general_transform, 16 * sizeof(float));
-        return;
-    }
-    if (node->transformable.component.present) {
+    } else if (hc) {
         m3g__component_to_rm(&node->transformable.component, out);
-        return;
+    } else {
+        m3g_mat4_identity(out);
     }
-    m3g_mat4_identity(out);
 }
 
 static void m3g__quat_from_axis_angle_deg(float angle_deg, float ax, float ay, float az, float q_out[4]) {
@@ -1525,6 +1536,14 @@ static m3g_result m3g__checked_int(uint32_t v, int *o, char const *lab) {
     if (v > 0x7FFFFFFFu) { m3g__set_err("%s out of range", lab); return M3G_ERR_RANGE; }
     *o = (int)v; return M3G_OK;
 }
+/* Fails if `count` items of at least `min_elem_bytes` each cannot fit in the data that is left. */
+static m3g_result m3g__check_count(m3g__br const *r, int count, size_t min_elem_bytes) {
+    if (count < 0 || (size_t)count > m3g__br_remain(r) / (min_elem_bytes ? min_elem_bytes : 1)) {
+        m3g__set_err("%s: count %d exceeds remaining data", r->label, count);
+        return M3G_ERR_FORMAT;
+    }
+    return M3G_OK;
+}
 static void m3g__write_u32_le(uint8_t *t, int off, int value) {
     t[off] = (uint8_t)(value & 0xFF);
     t[off+1] = (uint8_t)((value >> 8) & 0xFF);
@@ -1580,6 +1599,7 @@ static m3g_result m3g__read_object3d(m3g__br *r, m3g_object3d_meta *m) {
     rc = m3g__checked_int(uid, &m->user_id, "user id"); if (rc) return rc;
     rc = m3g__read_u32(r, &atc); if (rc) return rc;
     rc = m3g__checked_int(atc, &m->animation_track_count, "anim tracks"); if (rc) return rc;
+    rc = m3g__check_count(r, m->animation_track_count, 4); if (rc) return rc;
     if (m->animation_track_count > 0) {
         m->animation_track_ids = (int *)m3g__xmalloc((size_t)m->animation_track_count * sizeof(int));
         if (!m->animation_track_ids) return M3G_ERR_NOMEM;
@@ -1589,6 +1609,7 @@ static m3g_result m3g__read_object3d(m3g__br *r, m3g_object3d_meta *m) {
     }
     rc = m3g__read_u32(r, &upc); if (rc) return rc;
     rc = m3g__checked_int(upc, &m->user_parameter_count, "user params"); if (rc) return rc;
+    rc = m3g__check_count(r, m->user_parameter_count, 8); if (rc) return rc;
     if (m->user_parameter_count > 0) {
         m->user_parameters = (m3g_user_parameter *)m3g__xmalloc((size_t)m->user_parameter_count * sizeof(m3g_user_parameter));
         if (!m->user_parameters) return M3G_ERR_NOMEM;
@@ -1807,6 +1828,7 @@ static m3g_result m3g__parse_group_like(m3g_object *o, m3g__br *r, int is_world)
     rc = m3g__read_node(r, &o->u.group.node); if (rc) return rc;
     rc = m3g__read_u32(r, &cc); if (rc) return rc;
     rc = m3g__checked_int(cc, &o->u.group.child_count, "child count"); if (rc) return rc;
+    rc = m3g__check_count(r, o->u.group.child_count, 4); if (rc) return rc;
     if (o->u.group.child_count > 0) {
         o->u.group.child_ids = (int *)m3g__xmalloc((size_t)o->u.group.child_count * sizeof(int));
         if (!o->u.group.child_ids) return M3G_ERR_NOMEM;
@@ -1931,14 +1953,25 @@ static m3g_result m3g__parse_vertex_array(m3g_object *o, m3g__br *r) {
     rc = m3g__read_u8(r, &cc); if (rc) return rc; o->u.vertex_array.component_count = cc;
     rc = m3g__read_u8(r, &enc); if (rc) return rc; o->u.vertex_array.encoding = enc;
     rc = m3g__read_u16(r, &vc); if (rc) return rc; o->u.vertex_array.vertex_count = vc;
+    if (cs != 1 && cs != 2) { m3g__set_err("unsupported vertex component size %d", cs); return M3G_ERR_FORMAT; }
+    if (cc < 2 || cc > 4) { m3g__set_err("bad vertex component count %d", cc); return M3G_ERR_FORMAT; }
+    if (enc != 0 && enc != 1) { m3g__set_err("bad vertex array encoding %d", enc); return M3G_ERR_FORMAT; }
     total = o->u.vertex_array.vertex_count * o->u.vertex_array.component_count;
+    if ((size_t)total * cs > m3g__br_remain(r)) { m3g__set_err("vertex array data truncated"); return M3G_ERR_FORMAT; }
     o->u.vertex_array.component_total = total;
     o->u.vertex_array.components = (int *)m3g__xmalloc((size_t)(total > 0 ? total : 1) * sizeof(int));
     if (!o->u.vertex_array.components) return M3G_ERR_NOMEM;
     for (i = 0; i < total; ++i) {
         if (cs == 1) { rc = m3g__read_i8(r, &o->u.vertex_array.components[i]); if (rc) return rc; }
-        else if (cs == 2) { rc = m3g__read_i16(r, &o->u.vertex_array.components[i]); if (rc) return rc; }
-        else { m3g__set_err("unsupported vertex component size %d", cs); return M3G_ERR_FORMAT; }
+        else { rc = m3g__read_i16(r, &o->u.vertex_array.components[i]); if (rc) return rc; }
+    }
+    if (enc == 1) {   /* delta encoding: each vertex is stored relative to the previous one */
+        int stride = o->u.vertex_array.component_count;
+        int *v = o->u.vertex_array.components;
+        for (i = stride; i < total; ++i) {
+            int s = v[i] + v[i - stride];
+            v[i] = (cs == 1) ? (int)(int8_t)s : (int)(int16_t)s;
+        }
     }
     return M3G_OK;
 }
@@ -1954,6 +1987,7 @@ static m3g_result m3g__parse_vertex_buffer(m3g_object *o, m3g__br *r) {
     rc = m3g__read_objref(r, &o->u.vertex_buffer.colors_id); if (rc) return rc;
     rc = m3g__read_u32(r, &tc); if (rc) return rc;
     rc = m3g__checked_int(tc, &o->u.vertex_buffer.tex_coord_binding_count, "tex coords"); if (rc) return rc;
+    rc = m3g__check_count(r, o->u.vertex_buffer.tex_coord_binding_count, 20); if (rc) return rc;
     if (o->u.vertex_buffer.tex_coord_binding_count > 0) {
         o->u.vertex_buffer.tex_coord_bindings = (m3g_tex_coord_binding *)m3g__xmalloc(
             (size_t)o->u.vertex_buffer.tex_coord_binding_count * sizeof(m3g_tex_coord_binding));
@@ -2057,6 +2091,7 @@ static m3g_result m3g__parse_triangle_strip(m3g_object *o, m3g__br *r) {
         else { uint16_t s; rc = m3g__read_u16(r, &s); if (rc) return rc; start = s; }
         rc = m3g__read_u32(r, &n); if (rc) return rc;
         rc = m3g__checked_int(n, &o->u.triangle_strip.strip_count, "strips"); if (rc) return rc;
+        rc = m3g__check_count(r, o->u.triangle_strip.strip_count, 4); if (rc) return rc;
         o->u.triangle_strip.strip_lengths = (int *)m3g__xmalloc((size_t)(o->u.triangle_strip.strip_count > 0 ? o->u.triangle_strip.strip_count : 1) * sizeof(int));
         if (!o->u.triangle_strip.strip_lengths) return M3G_ERR_NOMEM;
         for (i = 0; i < o->u.triangle_strip.strip_count; ++i) {
@@ -2069,6 +2104,7 @@ static m3g_result m3g__parse_triangle_strip(m3g_object *o, m3g__br *r) {
     if (enc == 128 || enc == 129 || enc == 130) {                   /* explicit */
         rc = m3g__read_u32(r, &n); if (rc) return rc;
         rc = m3g__checked_int(n, &o->u.triangle_strip.index_count, "index count"); if (rc) return rc;
+        rc = m3g__check_count(r, o->u.triangle_strip.index_count, 1); if (rc) return rc;
         o->u.triangle_strip.indices = (int *)m3g__xmalloc((size_t)(o->u.triangle_strip.index_count > 0 ? o->u.triangle_strip.index_count : 1) * sizeof(int));
         if (!o->u.triangle_strip.indices) return M3G_ERR_NOMEM;
         for (i = 0; i < o->u.triangle_strip.index_count; ++i) {
@@ -2078,6 +2114,7 @@ static m3g_result m3g__parse_triangle_strip(m3g_object *o, m3g__br *r) {
         }
         rc = m3g__read_u32(r, &n); if (rc) return rc;
         rc = m3g__checked_int(n, &o->u.triangle_strip.strip_count, "strips"); if (rc) return rc;
+        rc = m3g__check_count(r, o->u.triangle_strip.strip_count, 4); if (rc) return rc;
         o->u.triangle_strip.strip_lengths = (int *)m3g__xmalloc((size_t)(o->u.triangle_strip.strip_count > 0 ? o->u.triangle_strip.strip_count : 1) * sizeof(int));
         if (!o->u.triangle_strip.strip_lengths) return M3G_ERR_NOMEM;
         for (i = 0; i < o->u.triangle_strip.strip_count; ++i) {
@@ -2090,16 +2127,17 @@ static m3g_result m3g__parse_triangle_strip(m3g_object *o, m3g__br *r) {
     return M3G_ERR_FORMAT;
 }
 static m3g_result m3g__parse_appearance(m3g_object *o, m3g__br *r) {
-    uint8_t layer; uint32_t tc; int i; m3g_result rc;
+    uint32_t tc; int i; m3g_result rc;
     o->object_type = M3G_OBJ_APPEARANCE;
     rc = m3g__read_object3d(r, &o->u.appearance.object3d); if (rc) return rc;
-    rc = m3g__read_u8(r, &layer); if (rc) return rc; o->u.appearance.layer = layer;
+    rc = m3g__read_i8(r, &o->u.appearance.layer); if (rc) return rc;
     rc = m3g__read_objref(r, &o->u.appearance.compositing_mode_id); if (rc) return rc;
     rc = m3g__read_objref(r, &o->u.appearance.fog_id); if (rc) return rc;
     rc = m3g__read_objref(r, &o->u.appearance.polygon_mode_id); if (rc) return rc;
     rc = m3g__read_objref(r, &o->u.appearance.material_id); if (rc) return rc;
     rc = m3g__read_u32(r, &tc); if (rc) return rc;
     rc = m3g__checked_int(tc, &o->u.appearance.texture_count, "textures"); if (rc) return rc;
+    rc = m3g__check_count(r, o->u.appearance.texture_count, 4); if (rc) return rc;
     if (o->u.appearance.texture_count > 0) {
         o->u.appearance.texture_ids = (int *)m3g__xmalloc((size_t)o->u.appearance.texture_count * sizeof(int));
         if (!o->u.appearance.texture_ids) return M3G_ERR_NOMEM;
@@ -2160,6 +2198,7 @@ static m3g_result m3g__parse_mesh(m3g_object *o, m3g__br *r, int skinned) {
     rc = m3g__read_objref(r, &o->u.mesh.vertex_buffer_id); if (rc) return rc;
     rc = m3g__read_u32(r, &sc); if (rc) return rc;
     rc = m3g__checked_int(sc, &o->u.mesh.submesh_count, "submeshes"); if (rc) return rc;
+    rc = m3g__check_count(r, o->u.mesh.submesh_count, 8); if (rc) return rc;
     if (o->u.mesh.submesh_count > 0) {
         o->u.mesh.submeshes = (m3g_submesh_ref *)m3g__xmalloc((size_t)o->u.mesh.submesh_count * sizeof(m3g_submesh_ref));
         if (!o->u.mesh.submeshes) return M3G_ERR_NOMEM;
@@ -2172,6 +2211,7 @@ static m3g_result m3g__parse_mesh(m3g_object *o, m3g__br *r, int skinned) {
         rc = m3g__read_objref(r, &o->u.mesh.skeleton_id); if (rc) return rc;
         rc = m3g__read_u32(r, &bc); if (rc) return rc;
         rc = m3g__checked_int(bc, &o->u.mesh.bone_transform_count, "bones"); if (rc) return rc;
+        rc = m3g__check_count(r, o->u.mesh.bone_transform_count, 16); if (rc) return rc;
         if (o->u.mesh.bone_transform_count > 0) {
             o->u.mesh.bone_transforms = (m3g_bone_transform *)m3g__xmalloc((size_t)o->u.mesh.bone_transform_count * sizeof(m3g_bone_transform));
             if (!o->u.mesh.bone_transforms) return M3G_ERR_NOMEM;
@@ -2194,6 +2234,7 @@ static m3g_result m3g__parse_morphing_mesh(m3g_object *o, m3g__br *r) {
     o->u.mesh.is_morphing = 1;
     rc = m3g__read_u32(r, &tc); if (rc) return rc;
     rc = m3g__checked_int(tc, &o->u.mesh.morph_target_count, "morph targets"); if (rc) return rc;
+    rc = m3g__check_count(r, o->u.mesh.morph_target_count, 8); if (rc) return rc;
     if (o->u.mesh.morph_target_count > 0) {
         o->u.mesh.morph_target_ids = (int *)m3g__xmalloc((size_t)o->u.mesh.morph_target_count * sizeof(int));
         o->u.mesh.morph_weights = (float *)m3g__xmalloc((size_t)o->u.mesh.morph_target_count * sizeof(float));
@@ -2264,6 +2305,12 @@ static m3g_result m3g__parse_keyframe_seq(m3g_object *o, m3g__br *r) {
     rc = m3g__read_u32(r, &vl); if (rc) return rc; rc = m3g__checked_int(vl, &o->u.keyframe_seq.valid_range_last, "vl"); if (rc) return rc;
     rc = m3g__read_u32(r, &cc); if (rc) return rc; rc = m3g__checked_int(cc, &o->u.keyframe_seq.component_count, "cc"); if (rc) return rc;
     rc = m3g__read_u32(r, &kc); if (rc) return rc; rc = m3g__checked_int(kc, &o->u.keyframe_seq.keyframe_count, "kc"); if (rc) return rc;
+    rc = m3g__check_count(r, o->u.keyframe_seq.keyframe_count, 4); if (rc) return rc;
+    if (o->u.keyframe_seq.component_count < 0 ||
+        (o->u.keyframe_seq.keyframe_count > 0 && (size_t)o->u.keyframe_seq.component_count > m3g__br_remain(r))) {
+        m3g__set_err("keyframe component count exceeds remaining data");
+        return M3G_ERR_FORMAT;
+    }
     o->u.keyframe_seq.keyframes = (m3g_keyframe *)m3g__xmalloc((size_t)(o->u.keyframe_seq.keyframe_count > 0 ? o->u.keyframe_seq.keyframe_count : 1) * sizeof(m3g_keyframe));
     if (!o->u.keyframe_seq.keyframes) return M3G_ERR_NOMEM;
     memset(o->u.keyframe_seq.keyframes, 0, (size_t)o->u.keyframe_seq.keyframe_count * sizeof(m3g_keyframe));
@@ -2726,6 +2773,8 @@ static m3g_result m3g__decode_image_rgba(m3g_image2d_data const *img, uint8_t **
     }
     es = m3g__img_entry_size(img->format);
     if (!es) return M3G_ERR_FORMAT;
+    if (img->width <= 0 || img->height <= 0 ||
+        (long long)img->width * (long long)img->height > (long long)(INT_MAX / 4)) return M3G_ERR_RANGE;
     pc = img->width * img->height;
     expected = img->palette_len > 0 ? pc : pc * es;
     if (pxlen != expected || m3g__looks_zlib(px, pxlen)) {
@@ -2988,13 +3037,30 @@ static m3g_result m3g__build_mesh(m3g__builder *b, m3g_object *mesh_obj, int *ou
         }
         rc = m3g__expand_strips(&ib->u.triangle_strip, &prim.indices, &prim.index_count);
         if (rc) { m3g__free_primitive(&prim); goto mesh_fail; }
+                {
+            int k, nv = pn / 3;
+            for (k = 0; k < prim.index_count; ++k) {
+                if (prim.indices[k] < 0 || prim.indices[k] >= nv) {
+                    m3g__set_err("triangle index out of range");
+                    m3g__free_primitive(&prim);
+                    rc = M3G_ERR_FORMAT;
+                    goto mesh_fail;
+                }
+            }
+        }
         rc = m3g__build_material(b, sub->appearance_id, colors != NULL, &mat_i); if (rc) { m3g__free_primitive(&prim); goto mesh_fail; }
         prim.material_index = mat_i;
         pna = (m3g_scene_primitive *)m3g__xrealloc(mesh.primitives, (size_t)(mesh.primitive_count+1)*sizeof(m3g_scene_primitive));
         if (!pna) { m3g__free_primitive(&prim); rc = M3G_ERR_NOMEM; goto mesh_fail; }
         mesh.primitives = pna; mesh.primitives[mesh.primitive_count++] = prim;
     }
-    M3G_FREE(positions); M3G_FREE(normals); M3G_FREE(colors); M3G_FREE(uvs);
+        M3G_FREE(positions); M3G_FREE(normals); M3G_FREE(colors); M3G_FREE(uvs);
+    if (mesh.primitive_count == 0) {
+        m3g__warn(b, "empty-mesh", "Mesh has no exportable submeshes; exported as an empty node.");
+        m3g__free_mesh_ir(&mesh);
+        *out_idx = -1;
+        return m3g__map_set(&b->mesh_map, &b->mesh_map_cap, mesh_obj->object_id, -1);
+    }
     *out_idx = b->scene.mesh_count;
     na = (m3g_scene_mesh *)m3g__xrealloc(b->scene.meshes, (size_t)(b->scene.mesh_count+1)*sizeof(m3g_scene_mesh));
     if (!na) { m3g__free_mesh_ir(&mesh); return M3G_ERR_NOMEM; }
@@ -3242,6 +3308,8 @@ static m3g_result m3g__build_scene(m3g_file const *file, char const *input_path,
                 if (first < 0) first = 0;
                 if (last >= seq->u.keyframe_seq.keyframe_count) last = seq->u.keyframe_seq.keyframe_count - 1;
                 if (last < first) continue;
+                if (seq->u.keyframe_seq.interpolation == M3G_KF_SPLINE || seq->u.keyframe_seq.interpolation == M3G_KF_SQUAD)
+                    m3g__warn(&b, "interpolation", "SPLINE/SQUAD keyframes are exported as LINEAR.");
                 memset(&samp, 0, sizeof(samp));
                 strncpy(samp.interpolation, seq->u.keyframe_seq.interpolation == M3G_KF_STEP ? "STEP" : "LINEAR", sizeof(samp.interpolation)-1);
                 samp.component_count = comps;
@@ -3272,13 +3340,15 @@ static m3g_result m3g__build_scene(m3g_file const *file, char const *input_path,
                             samp.values[oi*3+1] = kf->value_count>1?kf->values[1]:1;
                             samp.values[oi*3+2] = kf->value_count>2?kf->values[2]:1;
                         }
-                    } else {
-                        float q[4];
-                        m3g__quat_from_axis_angle_deg(
-                            kf->value_count>0?kf->values[0]:0,
-                            kf->value_count>1?kf->values[1]:0,
-                            kf->value_count>2?kf->values[2]:0,
-                            kf->value_count>3?kf->values[3]:1, q);
+                                        } else {
+                        float q[4], qn;
+                        q[0] = kf->value_count > 0 ? kf->values[0] : 0.f;
+                        q[1] = kf->value_count > 1 ? kf->values[1] : 0.f;
+                        q[2] = kf->value_count > 2 ? kf->values[2] : 0.f;
+                        q[3] = kf->value_count > 3 ? kf->values[3] : 1.f;
+                        qn = sqrtf(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+                        if (qn < 1e-8f) { q[0] = q[1] = q[2] = 0.f; q[3] = 1.f; }
+                        else { q[0] /= qn; q[1] /= qn; q[2] /= qn; q[3] /= qn; }
                         samp.values[oi*4+0]=q[0]; samp.values[oi*4+1]=q[1]; samp.values[oi*4+2]=q[2]; samp.values[oi*4+3]=q[3];
                     }
                 }
