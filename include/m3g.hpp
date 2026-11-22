@@ -78,7 +78,16 @@
  *    LICENSE / warranty: see project root.
  */
 
-#ifndef M3G_HPP_INCLUDED
+#ifdef M3G_IMPL
+  #ifndef M3G_DECODE_IMPL
+    #define M3G_DECODE_IMPL
+  #endif
+  #ifndef M3G_IMPLEMENTATION
+    #define M3G_IMPLEMENTATION
+  #endif
+  #undef M3G_IMPL
+#endif
+ #ifndef M3G_HPP_INCLUDED
 #define M3G_HPP_INCLUDED
 
 #include "m3g.h"
@@ -88,20 +97,14 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <map>
+#include <set>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <typeinfo>
+#include <utility>
 #include <vector>
 
-#ifdef M3G_IMPL
-#ifndef M3G_DECODE_IMPL
-#define M3G_DECODE_IMPL
-#endif
-#undef M3G_IMPL
-#endif
 
 #ifdef near
 #undef near
@@ -394,6 +397,9 @@ namespace m3g {
         void postRotate(float angle, float ax, float ay, float az);
         void postRotateQuat(float qx, float qy, float qz, float qw);
         void transform(float *vectors /* xyzw stride 4 */) const;
+        void transform(float *vectors, int count) const {
+            for (int i = 0; i < count; ++i) transform(vectors + 4 * i);
+        }
         void transform(const VertexArray &in, float *out, bool W) const;
 
         const float *data() const { return m_.data(); }
@@ -461,14 +467,8 @@ namespace m3g {
             angleAxis[2] = orientation_axis_[1];
             angleAxis[3] = orientation_axis_[2];
         }
-        void postRotate(float angle, float ax, float ay, float az) {
-            orientation_angle_ += angle;
-            orientation_axis_[0] = ax;
-            orientation_axis_[1] = ay;
-            orientation_axis_[2] = az;
-            has_component_ = true;
-        }
-        void preRotate(float angle, float ax, float ay, float az) { postRotate(angle, ax, ay, az); }
+        void postRotate(float angle, float ax, float ay, float az);
+        void preRotate(float angle, float ax, float ay, float az);
 
         void setTransform(const Transform *transform) {
             if (!transform) {
@@ -521,6 +521,21 @@ namespace m3g {
         static constexpr int X_AXIS = 146;
         static constexpr int Y_AXIS = 147;
         static constexpr int Z_AXIS = 148;
+
+        Node() = default;
+        Node(const Node &other) : Transformable(other) {
+            enable_rendering_ = other.enable_rendering_;
+            enable_picking_ = other.enable_picking_;
+            alpha_factor_ = other.alpha_factor_;
+            scope_ = other.scope_;
+            z_ref_ = other.z_ref_;
+            y_ref_ = other.y_ref_;
+            z_target_ = other.z_target_;
+            y_target_ = other.y_target_;
+            parent_ = nullptr; /* a copy starts without a parent */
+        }
+        Node &operator=(const Node &) = default;
+        
 
         void setRenderingEnable(bool enable) { enable_rendering_ = enable; }
         bool isRenderingEnabled() const { return enable_rendering_; }
@@ -614,12 +629,18 @@ namespace m3g {
         int getReferences(Object3DPtr *references, int max_count) const override {
             const int n = static_cast<int>(children_.size());
             if (references && max_count > 0) {
-                const int copy = std::min(n, max_count);
+                const int copy = (std::min)(n, max_count);
                 for (int i = 0; i < copy; ++i) references[i] = children_[static_cast<std::size_t>(i)];
             }
             return n;
         }
-        Object3DPtr duplicate() const override { return std::make_shared<Group>(*this); }
+            Object3DPtr duplicate() const override {
+            auto g = std::make_shared<Group>(*this);
+            g->children_.clear();
+            for (const auto &c : children_)
+                g->addChild(std::static_pointer_cast<Node>(c->duplicate()));
+            return g;
+        }
         const char *getClassName() const override { return "Group"; }
 
         /* toolkit */
@@ -647,7 +668,13 @@ namespace m3g {
         std::shared_ptr<Camera> getActiveCamera() const { return active_camera_; }
         void setBackground(const std::shared_ptr<Background> &background) { background_ = background; }
         std::shared_ptr<Background> getBackground() const { return background_; }
-        Object3DPtr duplicate() const override { return std::make_shared<World>(*this); }
+        Object3DPtr duplicate() const override {
+            auto w = std::make_shared<World>(*this);
+            w->children_.clear();
+            for (const auto &c : children_)
+                w->addChild(std::static_pointer_cast<Node>(c->duplicate()));
+            return w;
+        }
         const char *getClassName() const override { return "World"; }
 
     private:
@@ -718,10 +745,10 @@ namespace m3g {
         Object3DPtr duplicate() const override { return std::make_shared<Camera>(*this); }
         const char *getClassName() const override { return "Camera"; }
 
-        int projection_type_ = 0;
+        int projection_type_ = GENERIC;
         std::array<float, 4> params_{45.f, 1.f, 0.1f, 100.f};
-        float generic_[16]{};
-        bool has_generic_ = false;
+        float generic_[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        bool has_generic_ = true;
     };
 
     /**
@@ -832,7 +859,7 @@ namespace m3g {
         int color_ = 0;
         bool color_clear_ = true, depth_clear_ = true;
         std::shared_ptr<Image2D> image_;
-        int mode_x_ = 0, mode_y_ = 0;
+        int mode_x_ = BORDER, mode_y_ = BORDER;
         int crop_x_ = 0, crop_y_ = 0, crop_w_ = 0, crop_h_ = 0;
     };
 
@@ -867,8 +894,8 @@ namespace m3g {
         void setColor(int RGB) { color_ = RGB & 0x00ffffff; }
         int getColor() const { return color_; }
         const char *getClassName() const override { return "Fog"; }
-        int mode_ = 0, color_ = 0;
-        float density_ = 0, near_ = 0, far_ = 0;
+        int mode_ = LINEAR, color_ = 0;
+        float density_ = 1.f, near_ = 0.f, far_ = 1.f;
     };
 
     /**
@@ -900,7 +927,7 @@ namespace m3g {
         void setPerspectiveCorrectionEnable(bool e) { persp_ = e; }
         bool isPerspectiveCorrectionEnabled() const { return persp_; }
         const char *getClassName() const override { return "PolygonMode"; }
-        int culling_ = 0, shading_ = 0, winding_ = 0;
+        int culling_ = CULL_BACK, shading_ = SHADE_SMOOTH, winding_ = WINDING_CCW;
         bool two_sided_ = false, local_cam_ = false, persp_ = false;
     };
 
@@ -919,11 +946,14 @@ namespace m3g {
         static constexpr int AMBIENT = 1024, DIFFUSE = 2048, EMISSIVE = 4096, SPECULAR = 8192;
         Material() { object_type_ = M3G_OBJ_MATERIAL; }
         void setColor(int target, int ARGB) {
-            if (target == AMBIENT) ambient_ = ARGB;
-            else if (target == DIFFUSE) diffuse_ = ARGB;
-            else if (target == EMISSIVE) emissive_ = ARGB;
-            else if (target == SPECULAR) specular_ = ARGB;
+        if (target == 0 || (target & ~(AMBIENT | DIFFUSE | EMISSIVE | SPECULAR)))
+            throw std::invalid_argument("Material.setColor");
+        if (target & AMBIENT) ambient_ = ARGB;
+        if (target & DIFFUSE) diffuse_ = ARGB;
+        if (target & EMISSIVE) emissive_ = ARGB;
+        if (target & SPECULAR) specular_ = ARGB;
         }
+        
         int getColor(int target) const {
             if (target == AMBIENT) return ambient_;
             if (target == DIFFUSE) return diffuse_;
@@ -936,7 +966,7 @@ namespace m3g {
         void setVertexColorTrackingEnable(bool e) { vct_ = e; }
         bool isVertexColorTrackingEnabled() const { return vct_; }
         const char *getClassName() const override { return "Material"; }
-        int ambient_ = 0, diffuse_ = 0xffffffff, emissive_ = 0, specular_ = 0;
+        int ambient_ = 0x00333333, diffuse_ = static_cast<int>(0xFFCCCCCCu), emissive_ = 0, specular_ = 0;
         float shininess_ = 0;
         bool vct_ = false;
     };
@@ -1052,7 +1082,7 @@ namespace m3g {
         const char *getClassName() const override { return "Texture2D"; }
 
         std::shared_ptr<Image2D> image_;
-        int level_filter_ = 0, image_filter_ = 0, wrap_s_ = 0, wrap_t_ = 0, blending_ = 0, blend_color_ = 0;
+        int level_filter_ = FILTER_BASE_LEVEL, image_filter_ = FILTER_NEAREST, wrap_s_ = WRAP_REPEAT, wrap_t_ = WRAP_REPEAT, blending_ = FUNC_MODULATE, blend_color_ = 0;
     };
 
     /**
@@ -1360,7 +1390,11 @@ namespace m3g {
         }
         int getActiveIntervalStart() const { return active_start_; }
         int getActiveIntervalEnd() const { return active_end_; }
-        void setSpeed(float speed, int /*worldTime*/) { speed_ = speed; }
+        void setSpeed(float speed, int worldTime) {
+            ref_seq_ = getPosition(worldTime); /* uses the OLD speed */
+            ref_world_ = worldTime;
+            speed_ = speed;
+        }
         float getSpeed() const { return speed_; }
         void setPosition(float sequenceTime, int worldTime) {
             ref_seq_ = sequenceTime;
@@ -1725,10 +1759,13 @@ namespace m3g {
         static decode::Decoded load(const std::string &name, const decode::DecodeOptions &options = {}) {
             return decode::Decoder{}.decode_file(name, options);
         }
-        static decode::Decoded load(const std::vector<std::uint8_t> &data, int /*offset*/ = 0,
-                                    const decode::DecodeOptions &options = {}) {
-            return decode::Decoder{}.decode_bytes(data, {}, options);
-                                    }
+        static decode::Decoded load(const std::vector<std::uint8_t> &data, int offset = 0,
+        const decode::DecodeOptions &options = {}) {
+        if (offset < 0 || static_cast<std::size_t>(offset) > data.size())
+            throw std::out_of_range("Loader.load: offset");
+            std::vector<std::uint8_t> sub(data.begin() + offset, data.end());
+        return decode::Decoder{}.decode_bytes(sub, {}, options);
+        }
     };
 
     namespace exp {
@@ -2094,6 +2131,45 @@ namespace m3g {
         getCompositeTransform(m);
         transform->set(m);
     }
+        namespace {
+        void aa2q(float deg, float x, float y, float z, float q[4]) {
+            float len = std::sqrt(x * x + y * y + z * z);
+            if (len == 0.f) { q[0] = q[1] = q[2] = 0.f; q[3] = 1.f; return; }
+            float h = deg * 0.5f * 3.14159265358979f / 180.f;
+            float s = std::sin(h) / len;
+            q[0] = x * s; q[1] = y * s; q[2] = z * s; q[3] = std::cos(h);
+        }
+        void qmul(const float a[4], const float b[4], float o[4]) {
+            o[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
+            o[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
+            o[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
+            o[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+        }
+        void rotate_impl(float &angle, float axis[3], float ang, float ax, float ay, float az, bool pre) {
+            float q0[4], r[4], q[4];
+            aa2q(angle, axis[0], axis[1], axis[2], q0);
+            aa2q(ang, ax, ay, az, r);
+            if (pre) qmul(r, q0, q); else qmul(q0, r, q);
+            float n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+            for (int i = 0; i < 4; ++i) q[i] /= n;
+            float w = std::fmax(-1.f, std::fmin(1.f, q[3]));
+            float s = std::sqrt(1.f - w * w);
+            if (s < 1e-6f) { angle = 0.f; axis[0] = 0.f; axis[1] = 0.f; axis[2] = 1.f; }
+            else {
+                angle = 2.f * std::acos(w) * 180.f / 3.14159265358979f;
+                axis[0] = q[0] / s; axis[1] = q[1] / s; axis[2] = q[2] / s;
+            }
+        }
+    } // namespace
+
+    void Transformable::postRotate(float angle, float ax, float ay, float az) {
+        rotate_impl(orientation_angle_, orientation_axis_, angle, ax, ay, az, false);
+        has_component_ = true;
+    }
+    void Transformable::preRotate(float angle, float ax, float ay, float az) {
+        rotate_impl(orientation_angle_, orientation_axis_, angle, ax, ay, az, true);
+        has_component_ = true;
+    }
 
     /* TODO: This is a stub. It always sets the identity matrix regardless of
     * input. The comment inside the body ("leave identity for singular
@@ -2112,23 +2188,43 @@ namespace m3g {
     * Do NOT remove this function without also removing the public
     * declaration - it is part of the Java-style API surface. */
     void Transform::invert() {
-        /* simple adjoint for affine 4x4; identity fallback */
-        float inv[16];
-        m3g_mat4_identity(inv);
-        /* Prefer C math if available — leave identity for singular toolkit cases */
-        (void)inv;
-        /* For tests, postTranslate invert not required; leave as transpose of upper 3x3 + neg translation later */
-        setIdentity();
+        double a[4][8];
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c) {
+                a[r][c] = m_[static_cast<std::size_t>(r * 4 + c)];
+                a[r][4 + c] = (r == c) ? 1.0 : 0.0;
+            }
+        for (int col = 0; col < 4; ++col) {
+            int piv = col;
+            for (int r = col + 1; r < 4; ++r)
+                if (std::fabs(a[r][col]) > std::fabs(a[piv][col])) piv = r;
+            if (std::fabs(a[piv][col]) < 1e-12) throw std::domain_error("Transform.invert: singular");
+            if (piv != col) for (int c = 0; c < 8; ++c) std::swap(a[piv][c], a[col][c]);
+            double d = a[col][col];
+            for (int c = 0; c < 8; ++c) a[col][c] /= d;
+            for (int r = 0; r < 4; ++r) {
+                if (r == col) continue;
+                double f = a[r][col];
+                if (f != 0.0) for (int c = 0; c < 8; ++c) a[r][c] -= f * a[col][c];
+            }
+        }
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c)
+                m_[static_cast<std::size_t>(r * 4 + c)] = static_cast<float>(a[r][4 + c]);
     }
     void Transform::postRotate(float angle, float ax, float ay, float az) {
+        float len = std::sqrt(ax * ax + ay * ay + az * az);
+        if (len == 0.f) throw std::invalid_argument("Transform.postRotate: zero axis");
         float R[16];
-        m3g_mat4_rotation_axis(angle * (3.14159265358979323846f / 180.f), ax, ay, az, R);
+        m3g_mat4_rotation_axis(angle * (3.14159265358979323846f / 180.f), ax / len, ay / len, az / len, R);
         Transform t;
         t.set(R);
         postMultiply(t);
     }
     void Transform::postRotateQuat(float qx, float qy, float qz, float qw) {
-        float x = qx, y = qy, z = qz, w = qw;
+        float n = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+        if (n == 0.f) throw std::invalid_argument("Transform.postRotateQuat: zero quaternion");
+        float x = qx / n, y = qy / n, z = qz / n, w = qw / n;
         float R[16] = {
             1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w), 0,
             2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w), 0,
@@ -2240,35 +2336,28 @@ namespace m3g {
                     auto c = std::make_shared<Camera>();
                     apply_node(*c, o->u.camera.node);
                     c->projection_type_ = o->u.camera.projection_type;
-
-                    if (o->u.camera.has_perspective &&
-                        o->u.camera.projection_type == Camera::PERSPECTIVE) {
-                        c->setPerspective(o->u.camera.fov_degrees, o->u.camera.aspect_ratio,
-                                        o->u.camera.near_distance, o->u.camera.far_distance);
-                    } else if (o->u.camera.has_parallel &&
-                            o->u.camera.projection_type == Camera::PARALLEL) {
-                        c->setParallel(o->u.camera.fov_degrees, o->u.camera.aspect_ratio,
-                                    o->u.camera.near_distance, o->u.camera.far_distance);
+                    if (o->u.camera.has_perspective || o->u.camera.has_parallel) {
+                        c->params_ = {o->u.camera.fov_degrees, o->u.camera.aspect_ratio,
+                                      o->u.camera.near_distance, o->u.camera.far_distance};
                     }
-
                     if (o->u.camera.has_generic16) {
-                        Transform t;
-                        t.set(o->u.camera.generic_values);
-                        c->setGeneric(&t);
-                    }
+                        std::memcpy(c->generic_, o->u.camera.generic_values, sizeof(c->generic_));
+                        c->has_generic_ = true;
+                    }                    
                     base = c;
                     break;
                 }
                 case M3G_OBJ_LIGHT: {
                     auto l = std::make_shared<Light>();
                     apply_node(*l, o->u.light.node);
-                    l->setMode(o->u.light.mode);
-                    l->setIntensity(o->u.light.intensity);
-                    l->setColor((o->u.light.color.red << 16) | (o->u.light.color.green << 8) | o->u.light.color.blue);
-                    l->setAttenuation(o->u.light.attenuation_constant, o->u.light.attenuation_linear,
-                                      o->u.light.attenuation_quadratic);
-                    l->setSpotAngle(o->u.light.spot_angle);
-                    l->setSpotExponent(o->u.light.spot_exponent);
+                    l->mode_ = o->u.light.mode;
+                    l->intensity_ = o->u.light.intensity;
+                    l->color_ = (o->u.light.color.red << 16) | (o->u.light.color.green << 8) | o->u.light.color.blue;
+                    l->att_c_ = o->u.light.attenuation_constant;
+                    l->att_l_ = o->u.light.attenuation_linear;
+                    l->att_q_ = o->u.light.attenuation_quadratic;
+                    l->spot_angle_ = o->u.light.spot_angle;
+                    l->spot_exponent_ = o->u.light.spot_exponent;
                     base = l;
                     break;
                 }
@@ -2696,6 +2785,7 @@ namespace m3g {
         positions_ = positions;
         position_scale_ = scale;
         if (bias) std::memcpy(position_bias_, bias, 3 * sizeof(float));
+        else std::memset(position_bias_, 0, sizeof(position_bias_));
     }
     void VertexBuffer::setTexCoords(int index, const std::shared_ptr<VertexArray> &texCoords, float scale,
                                     const float *bias) {
@@ -2704,6 +2794,7 @@ namespace m3g {
         tex_coords_[static_cast<std::size_t>(index)].array = texCoords;
         tex_coords_[static_cast<std::size_t>(index)].scale = scale;
         if (bias) std::memcpy(tex_coords_[static_cast<std::size_t>(index)].bias, bias, 3 * sizeof(float));
+        else std::memset(tex_coords_[static_cast<std::size_t>(index)].bias, 0, 3 * sizeof(float));
                                     }
                                     std::shared_ptr<VertexArray> VertexBuffer::getPositions(float *scaleBias) const {
                                         if (scaleBias) {
@@ -2922,8 +3013,13 @@ namespace m3g {
 
                                     namespace decode {
 
-                                        static Decoded from_c(m3g_decoded &d) {
-                                            Decoded out;
+                                    struct DecodedGuard {
+                                        m3g_decoded *d;
+                                            ~DecodedGuard() { if (d) m3g_decoded_free(d); }
+                                };
+                                static Decoded from_c(m3g_decoded &d) {
+                                    DecodedGuard guard{&d};
+                                    Decoded out;
                                             if (d.source_path) out.source_path = d.source_path;
                                             out.objects_by_id.resize(static_cast<std::size_t>(d.file.object_count + 1));
                                             for (int id = 1; id <= d.file.object_count; ++id) {
@@ -2945,7 +3041,6 @@ namespace m3g {
                                                         if (!n->getParent()) out.roots.push_back(n);
                                             }
                                             out.scene_ir = scene::scene_ir_from_c(&d.scene);
-                                            m3g_decoded_free(&d);
                                             return out;
                                         }
 
