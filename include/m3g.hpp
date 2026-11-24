@@ -82,9 +82,6 @@
   #ifndef M3G_DECODE_IMPL
     #define M3G_DECODE_IMPL
   #endif
-  #ifndef M3G_IMPLEMENTATION
-    #define M3G_IMPLEMENTATION
-  #endif
   #undef M3G_IMPL
 #endif
  #ifndef M3G_HPP_INCLUDED
